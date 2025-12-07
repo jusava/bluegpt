@@ -13,10 +13,8 @@ from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel, Field
 from sse_starlette.sse import EventSourceResponse
 import uvicorn
-import asyncio
-import json
 
-from .agent import AgentManager, DEFAULT_MODEL, DEFAULT_SYSTEM_PROMPT
+from .agent import AgentManager, AVAILABLE_MODELS, DEFAULT_SYSTEM_PROMPT
 
 load_dotenv()
 
@@ -89,13 +87,15 @@ async def set_tool_active(name: str, payload: ToolActiveUpdate) -> JSONResponse:
 
 @app.get("/api/model")
 async def get_model() -> dict:
-    return {"model": DEFAULT_MODEL, "available": ["gpt-5.1", "gpt-5-mini"]}
+    return {"model": manager.current_model, "available": AVAILABLE_MODELS}
 
 
 @app.post("/api/model")
 async def set_model(payload: ModelUpdate) -> JSONResponse:
+    if payload.model not in AVAILABLE_MODELS:
+        raise HTTPException(status_code=400, detail="Model not supported")
     manager.current_model = payload.model
-    return JSONResponse({"model": manager.current_model, "available": ["gpt-5.1", "gpt-5-mini"]})
+    return JSONResponse({"model": manager.current_model, "available": AVAILABLE_MODELS})
 
 
 @app.get("/api/chat/{chat_id}")
@@ -109,7 +109,7 @@ async def chat(request: ChatRequest) -> JSONResponse:
     session = manager.get_or_create(
         request.chat_id,
         system_prompt=request.system_prompt or DEFAULT_SYSTEM_PROMPT,
-        model=request.model or DEFAULT_MODEL,
+        model=request.model or manager.current_model,
     )
     reply = await session.run(request.message)
     return JSONResponse(
@@ -144,7 +144,7 @@ async def chat_stream(request: ChatRequest = Body(...)) -> EventSourceResponse:
     session = manager.get_or_create(
         request.chat_id,
         system_prompt=request.system_prompt or DEFAULT_SYSTEM_PROMPT,
-        model=request.model or DEFAULT_MODEL,
+        model=request.model or manager.current_model,
     )
 
     async def event_generator() -> AsyncGenerator[dict, None]:

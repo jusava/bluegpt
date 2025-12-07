@@ -61,6 +61,7 @@ function addMessage(role, content, options = {}) {
     avatar.className = 'avatar';
     if (role === 'assistant') avatar.textContent = '🤖';
     else if (role === 'tool') avatar.textContent = '🛠️';
+    else if (role === 'status') avatar.textContent = '⏳';
     else avatar.textContent = '🙂';
 
     const bubble = document.createElement('div');
@@ -73,6 +74,48 @@ function addMessage(role, content, options = {}) {
     scrollToBottom();
 
     return { wrapper, bubble };
+}
+
+function addProcessingBubble() {
+    const start = performance.now();
+    const { wrapper, bubble } = addMessage('status', 'Processing…', { typing: false });
+    wrapper.classList.add('processing');
+
+    const setText = (text) => {
+        bubble.innerHTML = renderText(text);
+    };
+
+    const tick = () => {
+        const elapsed = (performance.now() - start) / 1000;
+        setText(`Processing… (${elapsed.toFixed(1)}s)`);
+    };
+
+    tick();
+    const interval = setInterval(tick, 300);
+    let finished = false;
+
+    const stop = () => {
+        if (interval) clearInterval(interval);
+    };
+
+    return {
+        complete(label = 'Completed') {
+            if (finished) return;
+            finished = true;
+            stop();
+            const elapsed = (performance.now() - start) / 1000;
+            wrapper.classList.remove('processing');
+            setText(`${label} in ${elapsed.toFixed(1)}s`);
+        },
+        fail(label = 'Request failed') {
+            if (finished) return;
+            finished = true;
+            stop();
+            const elapsed = (performance.now() - start) / 1000;
+            wrapper.classList.add('error');
+            setText(`${label} (${elapsed.toFixed(1)}s)`);
+        },
+    };
 }
 
 function renderHistory(history = []) {
@@ -191,7 +234,9 @@ async function sendMessage(text) {
     streaming = true;
     sendBtn.disabled = true;
     sendBtn.textContent = 'Sending...';
+    const progress = addProcessingBubble();
     const stream = startAssistantStream();
+    let completed = false;
 
     try {
         const response = await fetch('/api/chat/stream', {
@@ -237,6 +282,8 @@ async function sendMessage(text) {
             }
             if (event === 'done') {
                 if (data) chatId = data;
+                progress.complete();
+                completed = true;
                 if (stream.attach) stream.attach();
                 stream.done();
                 return true;
@@ -288,7 +335,12 @@ async function sendMessage(text) {
         if (showTools) renderToolCalls(payload.tool_calls || []);
         stream.append(payload.reply || 'No response.');
         stream.done();
+        progress.complete();
+        completed = true;
     } finally {
+        if (!completed) {
+            progress.complete();
+        }
         streaming = false;
         sendBtn.disabled = false;
         sendBtn.textContent = 'Send';

@@ -9,10 +9,7 @@ mcp = FastMCP("BlueGPT FastMCP Time")
 @mcp.tool()
 def current_time(timezone_name: str | None = None) -> str:
     """Return the current time in ISO-8601 format for the given timezone (IANA/`pytz`-style). Defaults to UTC."""
-    try:
-        tz = ZoneInfo(timezone_name) if timezone_name else timezone.utc
-    except Exception:  # noqa: BLE001
-        return f"Unknown timezone '{timezone_name}'. Provide an IANA/pytz timezone like 'Europe/Helsinki'."
+    tz = ZoneInfo(timezone_name) if timezone_name else timezone.utc
     return datetime.now(tz).isoformat()
 
 

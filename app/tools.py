@@ -291,10 +291,8 @@ def _load_fastmcp_stdio_tools_from_config(config: Dict[str, Any]) -> List[AgentT
 
 
 def _load_mcp_config() -> Dict[str, Any]:
-    """Load MCP config from TOML file specified by MCP_CONFIG_FILE (default: mcp.toml)."""
-    path = Path(os.getenv("MCP_CONFIG_FILE", "mcp.toml"))
-    if not path.exists():
-        return {}
+    """Load MCP config from TOML file specified by MCP_CONFIG_FILE (default: config/mcp.toml)."""
+    path = Path(os.getenv("MCP_CONFIG_FILE", "config/mcp.toml"))
     return tomllib.loads(path.read_text())
 
 

@@ -9,6 +9,7 @@ from dotenv import load_dotenv
 from fastapi import HTTPException
 from openai import AsyncOpenAI
 
+from .config import load_app_config, load_prompts_config
 from .tools import ToolRegistry, build_default_registry
 
 # Load .env early so environment variables are available even if main is not imported.
@@ -16,11 +17,12 @@ load_dotenv()
 
 logger = logging.getLogger(__name__)
 
-DEFAULT_SYSTEM_PROMPT = (
-    "You are BlueGPT, a concise assistant. Use provided tools when they improve factual accuracy. "
-    "Keep answers brief but helpful. If a tool call fails, explain the failure and continue."
-)
-DEFAULT_MODEL = os.getenv("OPENAI_MODEL", "gpt-5-mini")
+APP_CONFIG = load_app_config()
+PROMPTS_CONFIG = load_prompts_config()
+
+DEFAULT_SYSTEM_PROMPT = PROMPTS_CONFIG.get("system")
+DEFAULT_MODEL = APP_CONFIG.get("default_model", "gpt-5-mini")
+AVAILABLE_MODELS = APP_CONFIG.get("available_models", ["gpt-5.1", "gpt-5-mini"])
 
 _client: Optional[AsyncOpenAI] = None
 
