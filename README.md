@@ -1,22 +1,25 @@
 ## BlueGPT
 
-Local-first web UI that feels like ChatGPT/Gemini, backed by the OpenAI **Responses API** with an agentic loop and optional MCP tool connections.
+Local-first chat UI powered by the OpenAI **Responses API**, a FastAPI backend, and an agentic loop that can call FastMCP stdio tools.
+
+### Features
+- Agent loop with Responses API tool calling and reasoning traces streamed to the UI.
+- FastMCP stdio tool discovery from `config/mcp.toml`; toggle tools on/off from the Settings panel or `/api/tools`.
+- Config-driven defaults for model, reasoning effort, prompts, and sample suggestions.
+- Lightweight static frontend that streams text chunks and shows tool/reasoning events.
+- In-memory chat sessions with quick session switching (cleared on restart).
 
 ### Quickstart
-
 1. Create a virtual env (Python 3.13) and install deps:
    ```bash
    python -m venv .venv
    source .venv/bin/activate
    pip install -e .
    ```
-2. Copy `.env.example` to `.env` and set your OpenAI key (and optionally model/base URL):
+   (Alternatively, `uv run uvicorn app.main:app --reload` if you use uv.)
+2. Copy `.env.example` to `.env` and set `OPENAI_API_KEY` (and optionally `OPENAI_BASE_URL`):
    ```bash
    cp .env.example .env
-   # then edit .env with:
-   # OPENAI_API_KEY=sk-...
-   # OPENAI_MODEL=gpt-4o-mini   # optional
-   # OPENAI_BASE_URL=...        # optional, for self-hosted endpoints
    ```
 3. Run the app:
    ```bash
@@ -24,37 +27,46 @@ Local-first web UI that feels like ChatGPT/Gemini, backed by the OpenAI **Respon
    ```
 4. Open `http://localhost:8000/` in a browser.
 
-### MCP integration
+### Configuration
+- `config/config.toml` (override with `APP_CONFIG_FILE`): default model, allowed models, reasoning effort defaults, text verbosity, and max output tokens.
+- `config/prompts.toml` (override with `PROMPTS_CONFIG_FILE`): system prompt injected into new chats.
+- `config/samples.toml` (override with `SAMPLES_CONFIG_FILE`): quick-start suggestion cards shown in the UI.
+- `config/mcp.toml` (override with `MCP_CONFIG_FILE`): FastMCP stdio servers to auto-discover tools from. Example:
+  ```toml
+  [mcp]
+  [[mcp.stdio_servers]]
+  command = "fastmcp"
+  args = ["run", "mcps/time_helper.py:mcp"]
+  cwd = "."
+  # env = { EXAMPLE = "1" }
+  ```
+  Each server is started at backend boot and its tools are registered without renaming, so tool names match the server definitions.
 
-You can provide a TOML config file (default `config/mcp.toml`, override with `MCP_CONFIG_FILE`) to register FastMCP stdio servers (auto-discovery). Tools are negotiated from the server; no manual tool definitions. See the sample `config/mcp.toml` for structure (config only; env discovery removed):
-```toml
-[mcp]
-[[mcp.stdio_servers]]
-command = "fastmcp"
-args = ["run", "mcps/time_helper.py:mcp"]
-prefix = "fast_"
-cwd = "."
-```
-
-#### Sample FastMCP stdio server (time)
-
-1. Start the FastMCP server (stdio transport by default):
-   ```bash
-   fastmcp run mcps/time_helper.py:mcp
-   ```
-2. Configure the agent via `mcp.toml` (`[[mcp.stdio_servers]]` as above).
-3. Restart the main app and ask the chat to call `current_time` or `find_timezone`. The client launches the FastMCP server via stdio when needed.
+### MCP quickstart
+- The repo includes `mcps/time_helper.py` (FastMCP) exposing `current_time` and `find_timezone`.
+- With the sample `config/mcp.toml`, the FastAPI app will launch the FastMCP process automatically on startup.
+- If you want to run it manually: `fastmcp run mcps/time_helper.py:mcp` then chat with "current_time" or "find_timezone".
 
 ### API
+- `GET /health` → health probe.
+- `GET /` → static chat UI.
+- `GET /api/sessions` → list of in-memory chats.
+- `GET /api/chat/{chat_id}` → return text history for a chat.
+- `POST /api/chat` → non-streaming reply `{chat_id, reply, tools}`.
+- `POST /api/chat/stream` → SSE stream of text chunks plus `tool_start`, `tool_result`, and `reasoning` events; `done` event carries `chat_id`.
+- `GET /api/tools` → tool summaries; `POST /api/tools/{name}/active` to toggle.
+- `GET|POST /api/model` → read/update the active model (resets reasoning effort to the first allowed option).
+- `GET|POST /api/generation` → read/update reasoning effort, text verbosity, and max output tokens.
+- `GET /api/samples` → UI suggestion payload.
 
-- `POST /api/chat` → `{chat_id, reply, tools}`  
-- `POST /api/chat/stream` (SSE over fetch) → streaming reply chunks, `done` event carries `chat_id`  
-- `GET /api/sessions` → simple list of recent chat ids/titles  
-- `GET /` → Chat-style frontend
+### Project layout
+- `app/main.py` FastAPI surface and endpoints.
+- `app/agent.py` agent loop, OpenAI client wiring, and in-memory session store.
+- `app/tools.py` FastMCP stdio integration and tool registry.
+- `app/static/*` static frontend (no bundler).
+- `config/*.toml` configuration files; see above for overrides.
+- `mcps/` sample FastMCP servers; `tests/` basic smoke tests.
 
 ### Notes
-
-- The backend uses the OpenAI Responses API (function/tool calling) with a local loop that submits tool outputs before returning text.
-- The backend keeps chat history in memory per `chat_id`. Restarting the server clears it.
-- The UI streams responses and falls back to non-streaming if SSE is unavailable.
-- Styling is intentionally opinionated to echo the modern chat experience without needing a JS bundler.
+- Tool/process discovery happens at startup; check logs if a FastMCP process fails to launch.
+- Run tests with `pytest`.
