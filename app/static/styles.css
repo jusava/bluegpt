@@ -114,6 +114,23 @@ a { color: inherit; }
     opacity: 0.45;
 }
 
+.field {
+    display: flex;
+    flex-direction: column;
+    gap: 4px;
+    font-size: 13px;
+    color: var(--text);
+}
+
+.field select,
+.field input[type="number"] {
+    padding: 8px;
+    border-radius: 10px;
+    border: 1px solid var(--border);
+    background: #fff;
+    font-size: 14px;
+}
+
 .icon-btn {
     border: none;
     background: transparent;

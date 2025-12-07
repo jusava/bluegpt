@@ -3,7 +3,7 @@ import logging
 import os
 import uuid
 from dataclasses import dataclass, field
-from typing import Any, Awaitable, Callable, Dict, List, Optional, cast
+from typing import Any, Awaitable, Callable, Dict, List, Optional
 
 from dotenv import load_dotenv
 from fastapi import HTTPException
@@ -11,6 +11,8 @@ from openai import AsyncOpenAI
 
 from .config import load_app_config, load_prompts_config
 from .tools import ToolRegistry, build_default_registry
+from openai.types.shared_params.reasoning import Reasoning
+
 
 # Load .env early so environment variables are available even if main is not imported.
 load_dotenv()
@@ -23,86 +25,21 @@ PROMPTS_CONFIG = load_prompts_config()
 DEFAULT_SYSTEM_PROMPT = PROMPTS_CONFIG.get("system")
 DEFAULT_MODEL = APP_CONFIG.get("default_model", "gpt-5-mini")
 AVAILABLE_MODELS = APP_CONFIG.get("available_models", ["gpt-5.1", "gpt-5-mini"])
+DEFAULT_REASONING = APP_CONFIG.get("reasoning_effort", "none")
+DEFAULT_VERBOSITY = APP_CONFIG.get("text_verbosity", "low")
+DEFAULT_MAX_OUTPUT_TOKENS = APP_CONFIG.get("max_output_tokens", 1000)
 
 _client: Optional[AsyncOpenAI] = None
 
 
-def _extract_tool_calls(required_action: Any) -> List[Any]:
-    if not required_action:
-        return []
-    if isinstance(required_action, dict):
-        submit = required_action.get("submit_tool_outputs", {}) or {}
-    else:
-        submit = getattr(required_action, "submit_tool_outputs", None) or {}
-    tool_calls = getattr(submit, "tool_calls", None) if not isinstance(submit, dict) else submit.get("tool_calls")
-    if tool_calls is None:
-        tool_calls = getattr(submit, "tool_calls", []) if not isinstance(submit, dict) else []
-    return tool_calls or []
-
-
-def _extract_tool_calls_from_output(output: Any) -> List[Dict[str, Any]]:
-    calls: List[Dict[str, Any]] = []
-    if not output or not isinstance(output, list):
-        return calls
-    for item in output:
-        ctype = getattr(item, "type", None) or (item.get("type") if isinstance(item, dict) else None)
-        if ctype != "function_call":
-            continue
-        name = getattr(item, "name", None) or (item.get("name") if isinstance(item, dict) else None)
-        arguments = getattr(item, "arguments", None) or (item.get("arguments") if isinstance(item, dict) else None)
-        call_id = getattr(item, "call_id", None) or (item.get("call_id") if isinstance(item, dict) else None) or str(uuid.uuid4())
-        calls.append(
-            {
-                "id": call_id,
-                "function": {
-                    "name": name,
-                    "arguments": arguments,
-                },
-            }
-        )
-    return calls
-
-
 def _parse_tool_call(call: Any) -> tuple[str, str, Dict[str, Any]]:
-    call_id = getattr(call, "id", None) or call.get("id") or getattr(call, "call_id", None) or call.get("call_id") or str(uuid.uuid4())
-    function = getattr(call, "function", None) or call.get("function", {})
-    if function:
-        name = getattr(function, "name", None) or function.get("name") or "unknown_tool"
-        raw_args = getattr(function, "arguments", None) or function.get("arguments") or "{}"
-    else:
-        name = getattr(call, "name", None) or call.get("name") or "unknown_tool"
-        raw_args = getattr(call, "arguments", None) or call.get("arguments") or "{}"
+    call_id = str(call.call_id)
+    name = str(call.name)
+    raw_args = call.arguments
+
     args = json.loads(raw_args) if isinstance(raw_args, str) else dict(raw_args)
+
     return call_id, name, args
-
-
-def _extract_text(response: Any) -> Optional[str]:
-    # New Responses API may return output as list items; fall back to common shapes.
-    text_parts: List[str] = []
-
-    output = getattr(response, "output", None) or getattr(response, "output_text", None)
-
-    if isinstance(output, str):
-        text_parts.append(output)
-    elif isinstance(output, list):
-        for item in output:
-            content_list = getattr(item, "content", None) or getattr(item, "contents", None)
-            if content_list:
-                for content in content_list:
-                    ctype = getattr(content, "type", None) or (content.get("type") if isinstance(content, dict) else None)
-                    if ctype in {"text", "output_text"}:
-                        text_val = getattr(content, "text", None) or (content.get("text") if isinstance(content, dict) else None)
-                        if text_val:
-                            text_parts.append(str(text_val))
-            ctype = getattr(item, "type", None) or (item.get("type") if isinstance(item, dict) else None)
-            if ctype in {"text", "output_text"}:
-                text_val = getattr(item, "text", None) or (item.get("text") if isinstance(item, dict) else None)
-                if text_val:
-                    text_parts.append(str(text_val))
-
-    if text_parts:
-        return "\n".join([p for p in text_parts if p])
-    return None
 
 
 def get_client() -> AsyncOpenAI:
@@ -121,7 +58,10 @@ class AgentSession:
     registry: ToolRegistry
     system_prompt: str = DEFAULT_SYSTEM_PROMPT
     model: str = DEFAULT_MODEL
-    messages: List[Dict[str, Any]] = field(default_factory=list)
+    reasoning_effort: str = DEFAULT_REASONING
+    text_verbosity: str = DEFAULT_VERBOSITY
+    max_output_tokens: int = DEFAULT_MAX_OUTPUT_TOKENS
+    messages: List[Any] = field(default_factory=list)
     tool_trace: List[Dict[str, Any]] = field(default_factory=list)
 
     def __post_init__(self) -> None:
@@ -139,7 +79,6 @@ class AgentSession:
         self.messages.append({"role": "user", "content": user_message})
         self.tool_trace = []
         reply = await self._generate(on_event=on_event)
-        self.messages.append({"role": "assistant", "content": reply})
         return reply
 
     async def _generate(
@@ -148,67 +87,65 @@ class AgentSession:
     ) -> str:
         tools: List[Dict[str, Any]] = self.registry.list_for_responses() or []
         tools_param = tools or None
-        input_items: List[Dict[str, Any]] = list(self.messages)
+        input_list: List[Any] = self.messages
 
         client = get_client()
 
+        if on_event is not None:
+            async def do_on_event(event: Dict[str, Any]) -> None:
+                await on_event(event)
+        else:
+            async def do_on_event(event: Dict[str, Any]) -> None:
+                pass
 
         # Execute tool loop until the model stops requesting tools.
         while True:
             logger.debug("Creating response with model=%s tools=%d", self.model, len(tools or []))
             response = await client.responses.create(
                 model=self.model,
-                input=input_items,
+                input=input_list,
                 tools=tools_param,
+                reasoning=Reasoning(effort=self.reasoning_effort),
+                max_output_tokens=self.max_output_tokens,
             )
 
-            required_action = getattr(response, "required_action", None)
-            tool_calls = _extract_tool_calls(required_action) or _extract_tool_calls_from_output(getattr(response, "output", None))
+            input_list.extend(response.output)
 
-            if tool_calls:
-                output_items = getattr(response, "output", []) or []
-                input_items.extend(output_items)
-                tool_outputs: List[Dict[str, Any]] = []
-                for call in tool_calls:
-                    call_id, name, args = _parse_tool_call(call)
-                    try:
-                        schema = self.registry.get(name).as_response_tool().get("parameters")
-                    except Exception:
-                        schema = None
+            called_tools = False
+
+            for item in response.output:
+                if item.type == "reasoning":
+                    await do_on_event({"type": "reasoning", "reasoning": item.model_dump(exclude_none=True)})
+                    continue
+                if item.type == "function_call":
+                    call_id, name, args = _parse_tool_call(item)
+                    schema = self.registry.get(name).as_response_tool()["parameters"]
                     logger.debug("Tool call requested: %s args=%s expected_schema=%s", name, args, schema)
 
                     # Pre-validate required args to give the model actionable feedback.
-                    missing: list[str] = []
-                    if schema and isinstance(schema, dict):
-                        required_fields = schema.get("required") or []
-                        if isinstance(required_fields, list):
-                            missing = [
-                                field for field in required_fields if field not in args or args[field] in (None, "")
-                            ]
-                    if on_event:
-                        await on_event({"type": "tool_start", "name": name, "arguments": args})
+                    required_fields = schema.get("required", [])
+                    missing = [
+                        field for field in required_fields
+                        if field not in args or args[field] in (None, "")
+                    ]
+                    await do_on_event({"type": "tool_start", "name": name, "arguments": args})
+
                     if missing:
                         result = f"Missing required arguments for {name}: {', '.join(missing)}. Please retry with values."
                     else:
                         result = await self.registry.execute(name, args)
-                    if on_event:
-                        await on_event({"type": "tool_result", "name": name, "arguments": args, "output": result})
-                    self.tool_trace.append({"name": name, "arguments": args, "output": result})
 
-                    tool_outputs.append({"type": "function_call_output", "call_id": call_id, "output": str(result)})
-                    input_items.append(tool_outputs[-1])
+                    await do_on_event({"type": "tool_result", "name": name, "arguments": args, "output": result})
+                    input_list.append({"type": "function_call_output", "call_id": call_id, "output": str(result)})
+                    called_tools = True
+                # else:
+                #     await do_on_event({"type": str(item.type), "output": str(item)})
 
+            if called_tools:
                 # Loop again with updated input_list containing function_call_output entries.
                 continue
 
-            text = getattr(response, "output_text", None) or _extract_text(response)
-            if text is None:
-                raw = response.model_dump()
-                logger.error("Model returned no text response. Raw response: %s", raw)
-                raise HTTPException(status_code=500, detail="Model returned no text response.")
-            input_items.append({"role": "assistant", "content": text})
-            self.messages = cast(List[Dict[str, Any]], input_items)
-            return text
+            return response.output_text
 
 
 class AgentManager:
@@ -216,6 +153,9 @@ class AgentManager:
         self.registry = registry or build_default_registry()
         self.sessions: Dict[str, AgentSession] = {}
         self.current_model = DEFAULT_MODEL
+        self.reasoning_effort = DEFAULT_REASONING
+        self.text_verbosity = DEFAULT_VERBOSITY
+        self.max_output_tokens = DEFAULT_MAX_OUTPUT_TOKENS
 
     def get_or_create(
         self,
@@ -233,6 +173,9 @@ class AgentManager:
             registry=self.registry,
             system_prompt=system_prompt,
             model=model or self.current_model,
+            reasoning_effort=self.reasoning_effort,
+            text_verbosity=self.text_verbosity,
+            max_output_tokens=self.max_output_tokens,
         )
         self.sessions[new_chat_id] = session
         return session
@@ -245,8 +188,12 @@ class AgentManager:
 
     def _title_for(self, session: AgentSession) -> str:
         for message in session.messages:
-            if message["role"] == "user":
-                return (message["content"][:30] + "...") if len(message["content"]) > 30 else message["content"]
+            role = message.get("role") if isinstance(message, dict) else getattr(message, "role", None)
+            if role == "user":
+                content = message.get("content") if isinstance(message, dict) else getattr(message, "content", "")
+                if isinstance(content, str) and len(content) > 30:
+                    return content[:30] + "..."
+                return str(content)
         return "New chat"
 
     def history(self, chat_id: str) -> List[Dict[str, str]]:
@@ -256,10 +203,11 @@ class AgentManager:
         # Only return user/assistant text messages; skip system/tool metadata.
         view: List[Dict[str, str]] = []
         for msg in session.messages:
-            if msg["role"] not in {"user", "assistant"}:
+            role = msg.get("role") if isinstance(msg, dict) else getattr(msg, "role", None)
+            if role not in {"user", "assistant"}:
                 continue
-            content = msg.get("content")
+            content = msg.get("content") if isinstance(msg, dict) else getattr(msg, "content", None)
             if not content:
                 continue
-            view.append({"role": msg["role"], "content": str(content)})
+            view.append({"role": str(role), "content": str(content)})
         return view

@@ -14,7 +14,7 @@ from pydantic import BaseModel, Field
 from sse_starlette.sse import EventSourceResponse
 import uvicorn
 
-from .agent import AgentManager, AVAILABLE_MODELS, DEFAULT_SYSTEM_PROMPT
+from .agent import AgentManager, AVAILABLE_MODELS, DEFAULT_SYSTEM_PROMPT, DEFAULT_REASONING, DEFAULT_VERBOSITY, DEFAULT_MAX_OUTPUT_TOKENS
 from .config import load_samples_config
 
 load_dotenv()
@@ -55,6 +55,12 @@ class ToolActiveUpdate(BaseModel):
 
 class ModelUpdate(BaseModel):
     model: str
+
+
+class GenerationUpdate(BaseModel):
+    reasoning_effort: str
+    text_verbosity: str
+    max_output_tokens: int
 
 
 @app.get("/health")
@@ -98,6 +104,40 @@ async def set_model(payload: ModelUpdate) -> JSONResponse:
         raise HTTPException(status_code=400, detail="Model not supported")
     manager.current_model = payload.model
     return JSONResponse({"model": manager.current_model, "available": AVAILABLE_MODELS})
+
+
+@app.get("/api/generation")
+async def get_generation_settings() -> dict:
+    return {
+        "reasoning_effort": manager.reasoning_effort,
+        "text_verbosity": manager.text_verbosity,
+        "max_output_tokens": manager.max_output_tokens,
+        "defaults": {
+            "reasoning_effort": DEFAULT_REASONING,
+            "text_verbosity": DEFAULT_VERBOSITY,
+            "max_output_tokens": DEFAULT_MAX_OUTPUT_TOKENS,
+        },
+    }
+
+
+@app.post("/api/generation")
+async def set_generation_settings(payload: GenerationUpdate) -> JSONResponse:
+    if payload.reasoning_effort not in {"minimal", "low", "medium", "high"}:
+        raise HTTPException(status_code=400, detail="Invalid reasoning effort")
+    if payload.text_verbosity not in {"low", "medium", "high"}:
+        raise HTTPException(status_code=400, detail="Invalid text verbosity")
+    if payload.max_output_tokens <= 0:
+        raise HTTPException(status_code=400, detail="max_output_tokens must be positive")
+    manager.reasoning_effort = payload.reasoning_effort
+    manager.text_verbosity = payload.text_verbosity
+    manager.max_output_tokens = payload.max_output_tokens
+    return JSONResponse(
+        {
+            "reasoning_effort": manager.reasoning_effort,
+            "text_verbosity": manager.text_verbosity,
+            "max_output_tokens": manager.max_output_tokens,
+        }
+    )
 
 
 @app.get("/api/samples")

@@ -209,21 +209,19 @@ class ToolRegistry:
         logger.debug("Registered tool %s (source=%s) schema=%s", tool.name, tool.source, tool.as_response_tool())
 
     def list_for_responses(self) -> List[Dict[str, Any]]:
-        return [tool.as_response_tool() for name, tool in self._tools.items() if self._active.get(name, True)]
+        return [
+            tool.as_response_tool() 
+            for name, tool in self._tools.items() 
+            if self._active.get(name, True)
+            ]
 
     def get(self, name: str) -> AgentTool:
-        if name not in self._tools:
-            raise KeyError(f"Tool '{name}' is not registered")
         return self._tools[name]
 
     async def execute(self, name: str, arguments: Dict[str, Any]) -> str:
-        if name not in self._tools:
-            raise ValueError(f"Tool '{name}' is not registered")
-        if not self._active.get(name, True):
-            raise ValueError(f"Tool '{name}' is not active")
         return await self._tools[name](arguments)
 
-    def summary(self) -> List[Dict[str, str]]:
+    def summary(self) -> List[Dict[str, str|bool]]:
         return [
             {
                 "name": tool.name,

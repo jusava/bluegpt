@@ -10,6 +10,9 @@ const settingsClose = document.getElementById('settings-close');
 const settingsPanel = document.getElementById('settings-panel');
 const toolsTreeEl = document.getElementById('tools-tree');
 const modelSelectEl = document.getElementById('model-select');
+const reasoningSelectEl = document.getElementById('reasoning-effort');
+const verbositySelectEl = document.getElementById('text-verbosity');
+const maxTokensInput = document.getElementById('max-output-tokens');
 const chatListEl = document.getElementById('chat-list');
 const suggestionButtons = document.querySelectorAll('.suggestion-card');
 const suggestionsContainer = document.querySelector('.suggestions');
@@ -146,6 +149,8 @@ function addProcessingBubble() {
                 title.textContent = `Calling tool: ${payload.name || 'unknown'}`;
             } else if (eventType === 'tool_result') {
                 title.textContent = `Tool result: ${payload.name || 'unknown'}`;
+            } else if (eventType === 'reasoning') {
+                title.textContent = 'Reasoning';
             } else {
                 title.textContent = payload.message || 'Status update';
             }
@@ -163,6 +168,19 @@ function addProcessingBubble() {
             if (eventType === 'tool_result' && verbose) {
                 const output = typeof payload.output === 'string' ? payload.output : JSON.stringify(payload.output, null, 2);
                 lines.push(`Output:\n${output}`);
+            }
+            if (eventType === 'reasoning' && verbose) {
+                const reasoning = payload.reasoning || payload;
+                const summaryText = Array.isArray(reasoning.summary)
+                    ? reasoning.summary.map((s) => s.text).filter(Boolean).join('\n')
+                    : '';
+                const contentText = Array.isArray(reasoning.content)
+                    ? reasoning.content.map((c) => c.text).filter(Boolean).join('\n')
+                    : '';
+                const combined = [summaryText, contentText].filter(Boolean).join('\n\n');
+                if (combined) {
+                    lines.push(combined);
+                }
             }
             if (!lines.length && payload && verbose) {
                 lines.push(JSON.stringify(payload, null, 2));
@@ -288,6 +306,25 @@ async function refreshModel() {
     }
 }
 
+async function refreshGenerationSettings() {
+    try {
+        const res = await fetch('/api/generation');
+        if (!res.ok) return;
+        const payload = await res.json();
+        if (reasoningSelectEl && payload.reasoning_effort) {
+            reasoningSelectEl.value = payload.reasoning_effort;
+        }
+        if (verbositySelectEl && payload.text_verbosity) {
+            verbositySelectEl.value = payload.text_verbosity;
+        }
+        if (maxTokensInput && payload.max_output_tokens) {
+            maxTokensInput.value = payload.max_output_tokens;
+        }
+    } catch (err) {
+        console.error(err);
+    }
+}
+
 async function refreshTools() {
     try {
         const res = await fetch('/api/tools');
@@ -357,7 +394,7 @@ async function sendMessage(text) {
 
             if (event === 'error') throw new Error(data || 'Stream error');
             if (event === 'tools') return false;
-            if (['status', 'tool_start', 'tool_result'].includes(event)) {
+            if (['status', 'tool_start', 'tool_result', 'reasoning'].includes(event)) {
                 try {
                     const parsed = data ? JSON.parse(data) : {};
                     renderStatusEvent(event, parsed, showTools);
@@ -499,6 +536,7 @@ refreshSessions();
 refreshModel();
 refreshTools();
 refreshSamples();
+refreshGenerationSettings();
 
 function renderToolCalls(calls = []) {
     if (!Array.isArray(calls) || !calls.length) return;
@@ -516,6 +554,15 @@ function renderStatusEvent(eventType, payload = {}, verbose = true) {
         text = `Calling tool: ${payload.name || 'unknown'}`;
     } else if (eventType === 'tool_result') {
         text = `Tool result: ${payload.name || 'unknown'}`;
+    } else if (eventType === 'reasoning') {
+        const reasoning = payload.reasoning || payload;
+        const summaryText = Array.isArray(reasoning.summary)
+            ? reasoning.summary.map((s) => s.text).filter(Boolean).join('\n')
+            : '';
+        const contentText = Array.isArray(reasoning.content)
+            ? reasoning.content.map((c) => c.text).filter(Boolean).join('\n')
+            : '';
+        text = summaryText || contentText || 'Reasoning...';
     } else {
         text = payload.message || JSON.stringify(payload);
     }
@@ -663,4 +710,28 @@ if (modelSelectEl) {
             console.error(err);
         }
     });
+}
+
+if (reasoningSelectEl || verbositySelectEl || maxTokensInput) {
+    const pushGeneration = async () => {
+        try {
+            const body = {
+                reasoning_effort: reasoningSelectEl ? reasoningSelectEl.value : 'none',
+                text_verbosity: verbositySelectEl ? verbositySelectEl.value : 'low',
+                max_output_tokens: maxTokensInput ? parseInt(maxTokensInput.value, 10) || 1000 : 1000,
+            };
+            const res = await fetch('/api/generation', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify(body),
+            });
+            if (!res.ok) throw new Error('Failed to update generation settings');
+        } catch (err) {
+            console.error(err);
+        }
+    };
+
+    if (reasoningSelectEl) reasoningSelectEl.addEventListener('change', pushGeneration);
+    if (verbositySelectEl) verbositySelectEl.addEventListener('change', pushGeneration);
+    if (maxTokensInput) maxTokensInput.addEventListener('change', pushGeneration);
 }
