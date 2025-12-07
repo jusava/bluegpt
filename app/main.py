@@ -99,8 +99,21 @@ async def chat(request: ChatRequest) -> JSONResponse:
     )
 
 
-def _chunk_text(text: str, size: int = 20) -> List[str]:
-    return [text[i : i + size] for i in range(0, len(text), size)] or [""]
+def _chunk_text(text: str) -> List[str]:
+    # Chunk by a reasonable size but prefer to split on newlines when possible.
+    if not text:
+        return [""]
+    parts: List[str] = []
+    buffer = ""
+    for line in text.splitlines(keepends=True):
+        if len(buffer) + len(line) > 400:
+            parts.append(buffer)
+            buffer = line
+        else:
+            buffer += line
+    if buffer:
+        parts.append(buffer)
+    return parts or [text]
 
 
 @app.post("/api/chat/stream")

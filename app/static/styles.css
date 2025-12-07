@@ -283,11 +283,44 @@ a { color: inherit; }
 .bubble {
     background: #f6f9ff;
     border: 1px solid var(--border);
-    border-radius: 16px;
-    padding: 12px 14px;
+    border-radius: 14px;
+    padding: 10px 12px;
     line-height: 1.5;
     color: var(--text);
-    white-space: pre-wrap;
+    max-width: 820px;
+    width: fit-content;
+}
+
+.bubble p {
+    margin: 4px 0;
+}
+
+.bubble ul,
+.bubble ol {
+    margin: 4px 0 4px 18px;
+    padding: 0;
+}
+
+.bubble li {
+    margin: 2px 0;
+}
+
+.bubble pre {
+    background: #0f172a;
+    color: #e2e8f0;
+    padding: 10px;
+    border-radius: 10px;
+    overflow: auto;
+    font-family: 'SFMono-Regular', Consolas, 'Liberation Mono', Menlo, monospace;
+    font-size: 13px;
+}
+
+.bubble code {
+    background: rgba(15, 23, 42, 0.1);
+    padding: 2px 4px;
+    border-radius: 6px;
+    font-family: 'SFMono-Regular', Consolas, 'Liberation Mono', Menlo, monospace;
+    font-size: 13px;
 }
 
 .message.user .bubble {

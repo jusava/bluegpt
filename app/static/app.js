@@ -23,9 +23,14 @@ function scrollToBottom() {
 }
 
 function renderText(text) {
-    const div = document.createElement('div');
-    div.textContent = text;
-    return div.innerHTML.replace(/\n/g, '<br>');
+    if (window.marked && window.DOMPurify) {
+        if (marked.setOptions) {
+            marked.setOptions({ breaks: true, gfm: true });
+        }
+        const html = marked.parse(text);
+        return DOMPurify.sanitize(html);
+    }
+    return fallbackMarkdown(text);
 }
 
 function addMessage(role, content, options = {}) {
@@ -159,7 +164,7 @@ async function sendMessage(text) {
         let buffer = '';
 
         const flushEvent = (rawEvent) => {
-            if (!rawEvent.trim()) return false;
+            if (!rawEvent) return false;
             const lines = rawEvent.split(/\r?\n/);
             let event = 'message';
             const dataLines = [];
@@ -168,10 +173,11 @@ async function sendMessage(text) {
                 if (line.startsWith('data:')) {
                     let payload = line.slice(5);
                     if (payload.startsWith(' ')) payload = payload.slice(1);
+                    // Strip the leading 'data:' marker but keep the rest verbatim (including newlines).
                     dataLines.push(payload);
                 }
             }
-            const data = dataLines.join('');
+            const data = dataLines.join('\n');
 
             if (event === 'error') throw new Error(data || 'Stream error');
             if (event === 'tools') return false;
@@ -208,6 +214,7 @@ async function sendMessage(text) {
 
                 const rawEvent = buffer.slice(0, boundaryIdx);
                 buffer = buffer.slice(boundaryIdx + boundaryLen);
+                console.debug('SSE raw event:', rawEvent);
                 const stop = flushEvent(rawEvent);
                 if (stop) {
                     await refreshSessions();
@@ -308,4 +315,46 @@ function renderStatusEvent(eventType, payload = {}, verbose = true) {
         text = payload.message || JSON.stringify(payload);
     }
     addMessage('tool', text);
+}
+
+function fallbackMarkdown(raw) {
+    // Escape basic HTML.
+    let text = String(raw ?? '')
+        .replace(/&/g, '&amp;')
+        .replace(/</g, '&lt;')
+        .replace(/>/g, '&gt;');
+
+    // Fenced code blocks ``` ```
+    text = text.replace(/```([\s\S]*?)```/g, (_, code) => `<pre><code>${code.trim()}</code></pre>`);
+    // Inline code `code`
+    text = text.replace(/`([^`]+)`/g, '<code>$1</code>');
+    // Bold **text**
+    text = text.replace(/\*\*([^*]+)\*\*/g, '<strong>$1</strong>');
+    // Italic *text*
+    text = text.replace(/\*([^*\n]+)\*/g, '<em>$1</em>');
+
+    // Simple lists: lines starting with -, *, or number.
+    const lines = text.split(/\r?\n/);
+    const htmlParts = [];
+    let listBuf = [];
+    const flushList = () => {
+        if (!listBuf.length) return;
+        const items = listBuf.map((item) => `<li>${item}</li>`).join('');
+        htmlParts.push(`<ul>${items}</ul>`);
+        listBuf = [];
+    };
+    lines.forEach((line) => {
+        const trimmed = line.trim();
+        const listMatch = trimmed.match(/^([-*]|\d+\.)\s+(.*)$/);
+        if (listMatch) {
+            listBuf.push(listMatch[2]);
+        } else {
+            flushList();
+            if (trimmed.length) {
+                htmlParts.push(`<p>${trimmed}</p>`);
+            }
+        }
+    });
+    flushList();
+    return htmlParts.join('') || text.replace(/\n/g, '<br>');
 }
