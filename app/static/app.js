@@ -1,5 +1,7 @@
 import { addMessage, addProcessingBubble, startAssistantStream, renderHistory, renderStatusEvent } from './ui/messages.js';
 import { attachSettingsListeners, loadChat, refreshGenerationSettings, refreshModel, refreshSessions, refreshTools } from './ui/settings.js';
+import { ChatStream } from './ui/stream.js';
+
 
 const promptEl = document.getElementById('prompt');
 const formEl = document.getElementById('chat-form');
@@ -49,6 +51,7 @@ async function sendMessage(text) {
     const progress = addProcessingBubble();
     activeProgress = progress;
     const stream = startAssistantStream();
+    let chatIdReceived = null;
     let completed = false;
 
     try {
@@ -58,85 +61,38 @@ async function sendMessage(text) {
             body: JSON.stringify({ message: text, chat_id: chatId || null }),
         });
 
-        if (!response.ok || !response.body) {
-            throw new Error('Stream not available');
-        }
-
-        const reader = response.body.getReader();
-        const decoder = new TextDecoder();
-        let buffer = '';
-
-        const flushEvent = (rawEvent) => {
-            if (!rawEvent) return false;
-            const lines = rawEvent.split(/\r?\n/);
-            let event = 'message';
-            const dataLines = [];
-            for (const line of lines) {
-                if (line.startsWith('event:')) event = line.slice(6).trim();
-                if (line.startsWith('data:')) {
-                    let payload = line.slice(5);
-                    if (payload.startsWith(' ')) payload = payload.slice(1);
-                    if (payload.endsWith('\r')) payload = payload.slice(0, -1);
-                    // Strip the leading 'data:' marker but keep the rest verbatim (including newlines).
-                    dataLines.push(payload);
-                }
+        for await (const { event, data } of ChatStream(response)) {
+            if (event === 'error') {
+                throw new Error(data || 'Stream error');
             }
-            const eventName = event.toLowerCase();
-            const data = dataLines.join('\n').replace(/\r$/, '');
 
-            if (eventName === 'error') throw new Error(data || 'Stream error');
-            if (['status', 'tool_start', 'tool_result', 'reasoning'].includes(eventName)) {
+            if (['status', 'tool_start', 'tool_result', 'reasoning'].includes(event)) {
                 try {
                     const parsed = data ? JSON.parse(data) : {};
-                    renderStatusEvent(activeProgress, eventName, parsed);
+                    renderStatusEvent(activeProgress, event, parsed);
                 } catch (e) {
                     console.error('Failed to parse status event', e);
                 }
-                return false;
+                continue;
             }
-            if (eventName === 'done') {
-                if (data) chatId = data;
+
+            if (event === 'done') {
+                if (data) chatIdReceived = data;
                 progress.complete();
                 completed = true;
                 if (stream.attach) stream.attach();
                 stream.done();
-                return true;
-            }
-            if (data) stream.append(data);
-            return false;
-        };
-
-        while (true) {
-            const { done, value } = await reader.read();
-            buffer += decoder.decode(value || new Uint8Array(), { stream: !done });
-
-            while (true) {
-                const idxNN = buffer.indexOf('\n\n');
-                const idxCRNN = buffer.indexOf('\r\n\r\n');
-                const boundaryIdx =
-                    idxNN === -1 ? idxCRNN : idxCRNN === -1 ? idxNN : Math.min(idxNN, idxCRNN);
-                const boundaryLen = boundaryIdx === idxCRNN ? 4 : 2;
-                if (boundaryIdx === -1) break;
-
-                const rawEvent = buffer.slice(0, boundaryIdx);
-                buffer = buffer.slice(boundaryIdx + boundaryLen);
-                // console.debug('SSE raw event:', rawEvent);
-                const stop = flushEvent(rawEvent);
-                if (stop) {
-                    await refreshSessions();
-                    streaming = false;
-                    sendBtn.disabled = false;
-                    sendBtn.textContent = 'Send';
-                    return;
-                }
-            }
-
-            if (done) {
-                if (buffer.trim()) flushEvent(buffer);
-                stream.done();
                 break;
             }
+
+            if (data) stream.append(data);
         }
+
+        if (chatIdReceived) chatId = chatIdReceived;
+
+    } catch (err) {
+        console.error(err);
+        addMessage('assistant', 'Something went wrong. Please try again.');
     } finally {
         if (!completed) {
             progress.complete();

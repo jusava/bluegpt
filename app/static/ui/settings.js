@@ -27,7 +27,7 @@ export async function refreshSessions(currentChatId, onSelectChat) {
             chatListEl.appendChild(item);
         });
     } catch (err) {
-        console.error(err);
+        console.error('Failed to refresh sessions:', err);
     }
 }
 
@@ -66,7 +66,7 @@ export async function refreshModel() {
         const allowed = (payload.reasoning_options && payload.reasoning_options[payload.model]) || [];
         applyReasoningOptions(allowed, payload.reasoning_effort);
     } catch (err) {
-        console.error(err);
+        console.error('Failed to refresh model:', err);
     }
 }
 
@@ -89,7 +89,7 @@ export async function refreshGenerationSettings() {
             maxTokensInput.value = payload.max_output_tokens;
         }
     } catch (err) {
-        console.error(err);
+        console.error('Failed to refresh generation settings:', err);
     }
 }
 
@@ -100,7 +100,7 @@ export async function refreshTools() {
         const tools = await res.json();
         renderToolsTree(Array.isArray(tools) ? tools : []);
     } catch (err) {
-        console.error(err);
+        console.error('Failed to refresh tools:', err);
     }
 }
 
@@ -115,7 +115,7 @@ function setSelectOptions(selectEl, options, current) {
         if (current === opt || (!current && prev === opt)) optionEl.selected = true;
         selectEl.appendChild(optionEl);
     });
-    console.debug('Set select options:', selectEl.id, options, current);
+    // console.debug('Set select options:', selectEl.id, options, current);
     if (current && options.includes(current)) {
         selectEl.value = current;
     } else {
@@ -226,7 +226,7 @@ export function attachSettingsListeners() {
                 applyReasoningOptions(allowed, payload.reasoning_effort);
                 if (modelLabelEl) modelLabelEl.textContent = `Model: ${payload.model}`;
             } catch (err) {
-                console.error(err);
+                console.error('Model selection error:', err);
             }
         });
     }

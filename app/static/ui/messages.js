@@ -4,47 +4,14 @@ function scrollToBottom() {
     messagesEl.scrollTop = messagesEl.scrollHeight;
 }
 
-function fallbackMarkdown(raw) {
-    // Escape basic HTML.
-    let text = String(raw ?? '')
+// Fallback if marked is missing (simple text escape)
+function escapeHtml(text) {
+    return String(text ?? '')
         .replace(/&/g, '&amp;')
         .replace(/</g, '&lt;')
         .replace(/>/g, '&gt;');
-
-    // Fenced code blocks ``` ```
-    text = text.replace(/```([\s\S]*?)```/g, (_, code) => `<pre><code>${code.trim()}</code></pre>`);
-    // Inline code `code`
-    text = text.replace(/`([^`]+)`/g, '<code>$1</code>');
-    // Bold **text**
-    text = text.replace(/\*\*([^*]+)\*\*/g, '<strong>$1</strong>');
-    // Italic *text*
-    text = text.replace(/\*([^*\n]+)\*/g, '<em>$1</em>');
-
-    // Simple lists: lines starting with -, *, or number.
-    const lines = text.split(/\r?\n/);
-    const htmlParts = [];
-    let listBuf = [];
-    const flushList = () => {
-        if (!listBuf.length) return;
-        const items = listBuf.map((item) => `<li>${item}</li>`).join('');
-        htmlParts.push(`<ul>${items}</ul>`);
-        listBuf = [];
-    };
-    lines.forEach((line) => {
-        const trimmed = line.trim();
-        const listMatch = trimmed.match(/^([-*]|\d+\.)\s+(.*)$/);
-        if (listMatch) {
-            listBuf.push(listMatch[2]);
-        } else {
-            flushList();
-            if (trimmed.length) {
-                htmlParts.push(`<p>${trimmed}</p>`);
-            }
-        }
-    });
-    flushList();
-    return htmlParts.join('') || text.replace(/\n/g, '<br>');
 }
+
 
 export function renderText(text) {
     if (window.marked && window.DOMPurify) {
@@ -54,7 +21,7 @@ export function renderText(text) {
         const html = marked.parse(text);
         return DOMPurify.sanitize(html);
     }
-    return fallbackMarkdown(text);
+    return escapeHtml(text);
 }
 
 export function addMessage(role, content, options = {}) {
