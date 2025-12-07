@@ -41,12 +41,9 @@
                     <div class="subtitle">Feels like ChatGPT, powered by your OpenAI + MCP tools</div>
                 </div>
                 <div class="status">
-                    <label class="toggle">
-                        <input type="checkbox" id="show-tools" checked>
-                        <span>Show details</span>
-                    </label>
+                    <button id="settings-toggle" class="secondary-btn">Settings</button>
                     <span class="dot live"></span>
-                    <span id="model-label">Model: gpt-4o-mini</span>
+                    <span id="model-label">Model: gpt-5-mini</span>
                 </div>
             </header>
 
@@ -75,6 +72,27 @@
                 </div>
             </form>
         </main>
+
+        <aside id="settings-panel" class="settings-panel">
+            <div class="settings-header">
+                <div>
+                    <div class="title">Settings & Status</div>
+                    <div class="subtitle">Toggle tools and view MCP sources</div>
+                </div>
+                <button id="settings-close" class="icon-btn" aria-label="Close settings">✕</button>
+            </div>
+            <div class="settings-content">
+                <div class="section-title">Tools</div>
+                <div id="tools-tree" class="tools-tree"></div>
+                <div class="section-title">Model</div>
+                <select id="model-select"></select>
+                <div class="section-title">Display</div>
+                <label class="toggle">
+                    <input type="checkbox" id="show-tools" />
+                    <span>Show details</span>
+                </label>
+            </div>
+        </aside>
     </div>
     <script src="https://cdn.jsdelivr.net/npm/marked/marked.min.js"></script>
     <script src="https://cdn.jsdelivr.net/npm/dompurify@3.1.4/dist/purify.min.js"></script>

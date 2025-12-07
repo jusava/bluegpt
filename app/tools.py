@@ -201,13 +201,15 @@ class FastMCPStdioTool(AgentTool):
 class ToolRegistry:
     def __init__(self) -> None:
         self._tools: Dict[str, AgentTool] = {}
+        self._active: Dict[str, bool] = {}
 
     def register(self, tool: AgentTool) -> None:
         self._tools[tool.name] = tool
+        self._active[tool.name] = True
         logger.debug("Registered tool %s (source=%s) schema=%s", tool.name, tool.source, tool.as_response_tool())
 
     def list_for_responses(self) -> List[Dict[str, Any]]:
-        return [tool.as_response_tool() for tool in self._tools.values()]
+        return [tool.as_response_tool() for name, tool in self._tools.items() if self._active.get(name, True)]
 
     def get(self, name: str) -> AgentTool:
         if name not in self._tools:
@@ -217,13 +219,25 @@ class ToolRegistry:
     async def execute(self, name: str, arguments: Dict[str, Any]) -> str:
         if name not in self._tools:
             raise ValueError(f"Tool '{name}' is not registered")
+        if not self._active.get(name, True):
+            raise ValueError(f"Tool '{name}' is not active")
         return await self._tools[name](arguments)
 
     def summary(self) -> List[Dict[str, str]]:
         return [
-            {"name": tool.name, "description": tool.description, "source": tool.source}
+            {
+                "name": tool.name,
+                "description": tool.description,
+                "source": tool.source,
+                "active": self._active.get(tool.name, True),
+            }
             for tool in self._tools.values()
         ]
+
+    def set_active(self, name: str, active: bool) -> None:
+        if name not in self._tools:
+            raise KeyError(f"Tool '{name}' is not registered")
+        self._active[name] = bool(active)
 
 
 def _discover_fastmcp_stdio_servers_from_config(config: Dict[str, Any]) -> List[AgentTool]:

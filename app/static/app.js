@@ -5,16 +5,36 @@ const sendBtn = document.getElementById('send-btn');
 const newChatBtn = document.getElementById('new-chat');
 const showToolsToggle = document.getElementById('show-tools');
 const modelLabelEl = document.getElementById('model-label');
+const settingsToggle = document.getElementById('settings-toggle');
+const settingsClose = document.getElementById('settings-close');
+const settingsPanel = document.getElementById('settings-panel');
+const toolsTreeEl = document.getElementById('tools-tree');
+const modelSelectEl = document.getElementById('model-select');
 const chatListEl = document.getElementById('chat-list');
 const suggestionButtons = document.querySelectorAll('.suggestion-card');
 
 let chatId = null;
 let streaming = false;
-let showTools = showToolsToggle ? showToolsToggle.checked : true;
+let showTools = showToolsToggle ? showToolsToggle.checked : false;
+let settingsOpen = false;
 
 if (showToolsToggle) {
     showToolsToggle.addEventListener('change', () => {
         showTools = showToolsToggle.checked;
+    });
+}
+
+if (settingsToggle && settingsPanel) {
+    settingsToggle.addEventListener('click', () => {
+        settingsOpen = !settingsOpen;
+        settingsPanel.classList.toggle('open', settingsOpen);
+    });
+}
+
+if (settingsClose && settingsPanel) {
+    settingsClose.addEventListener('click', () => {
+        settingsOpen = false;
+        settingsPanel.classList.remove('open');
     });
 }
 
@@ -121,6 +141,31 @@ async function refreshModel() {
         if (modelLabelEl && payload.model) {
             modelLabelEl.textContent = `Model: ${payload.model}`;
         }
+        if (modelSelectEl && payload.available) {
+            const currentValue = modelSelectEl.value;
+            modelSelectEl.innerHTML = '';
+            (payload.available || []).forEach((m) => {
+                const opt = document.createElement('option');
+                opt.value = m;
+                opt.textContent = m;
+                if (payload.model === m) opt.selected = true;
+                modelSelectEl.appendChild(opt);
+            });
+            if (currentValue && payload.available.includes(currentValue)) {
+                modelSelectEl.value = currentValue;
+            }
+        }
+    } catch (err) {
+        console.error(err);
+    }
+}
+
+async function refreshTools() {
+    try {
+        const res = await fetch('/api/tools');
+        if (!res.ok) return;
+        const tools = await res.json();
+        renderToolsTree(Array.isArray(tools) ? tools : []);
     } catch (err) {
         console.error(err);
     }
@@ -286,6 +331,7 @@ suggestionButtons.forEach((btn) =>
 addMessage('assistant', 'Hey! I am BlueGPT. I use OpenAI plus optional MCP tools via a local agentic loop. Ask me anything, or click a suggestion to start.');
 refreshSessions();
 refreshModel();
+refreshTools();
 
 function renderToolCalls(calls = []) {
     if (!Array.isArray(calls) || !calls.length) return;
@@ -357,4 +403,97 @@ function fallbackMarkdown(raw) {
     });
     flushList();
     return htmlParts.join('') || text.replace(/\n/g, '<br>');
+}
+
+function renderToolsTree(tools = []) {
+    if (!toolsTreeEl) return;
+    toolsTreeEl.innerHTML = '';
+    if (!tools.length) {
+        toolsTreeEl.innerHTML = '<div class="empty-chat">No tools available</div>';
+        return;
+    }
+    const grouped = tools.reduce((acc, tool) => {
+        const key = tool.source || 'unknown';
+        acc[key] = acc[key] || { tools: [], active: true };
+        acc[key].tools.push(tool);
+        return acc;
+    }, {});
+
+    Object.entries(grouped).forEach(([source, list]) => {
+        const group = document.createElement('div');
+        group.className = 'tool-group';
+
+        const titleRow = document.createElement('div');
+        titleRow.className = 'tool-group-title';
+        const groupCb = document.createElement('input');
+        groupCb.type = 'checkbox';
+        const allActive = list.tools.every((t) => t.active !== false);
+        groupCb.checked = allActive;
+        groupCb.addEventListener('change', async () => {
+            const active = groupCb.checked;
+            await Promise.all(
+                list.tools.map(async (tool) => {
+                    await toggleTool(tool.name, active);
+                    tool.active = active;
+                })
+            );
+            renderToolsTree(tools);
+        });
+        const title = document.createElement('span');
+        title.textContent = source;
+        titleRow.appendChild(groupCb);
+        titleRow.appendChild(title);
+        group.appendChild(titleRow);
+
+        list.tools.forEach((tool) => {
+            const item = document.createElement('label');
+            item.className = 'tool-item';
+            if (!groupCb.checked) item.classList.add('disabled');
+            const cb = document.createElement('input');
+            cb.type = 'checkbox';
+            cb.checked = tool.active !== false;
+            cb.disabled = !groupCb.checked;
+            cb.addEventListener('change', async () => {
+                try {
+                    await toggleTool(tool.name, cb.checked);
+                    tool.active = cb.checked;
+                } catch (err) {
+                    console.error(err);
+                    cb.checked = !cb.checked;
+                }
+            });
+            const name = document.createElement('span');
+            name.textContent = tool.name;
+            item.appendChild(cb);
+            item.appendChild(name);
+            group.appendChild(item);
+        });
+
+        toolsTreeEl.appendChild(group);
+    });
+}
+
+async function toggleTool(name, active) {
+    await fetch(`/api/tools/${encodeURIComponent(name)}/active`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ active }),
+    });
+}
+
+if (modelSelectEl) {
+    modelSelectEl.addEventListener('change', async () => {
+        try {
+            const val = modelSelectEl.value;
+            const res = await fetch('/api/model', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ model: val }),
+            });
+            if (!res.ok) throw new Error('Failed to set model');
+            await refreshModel();
+        } catch (err) {
+            console.error(err);
+        }
+    });
 }

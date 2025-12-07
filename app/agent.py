@@ -213,6 +213,7 @@ class AgentManager:
     def __init__(self, registry: Optional[ToolRegistry] = None) -> None:
         self.registry = registry or build_default_registry()
         self.sessions: Dict[str, AgentSession] = {}
+        self.current_model = DEFAULT_MODEL
 
     def get_or_create(
         self,
@@ -229,7 +230,7 @@ class AgentManager:
             chat_id=new_chat_id,
             registry=self.registry,
             system_prompt=system_prompt,
-            model=model,
+            model=model or self.current_model,
         )
         self.sessions[new_chat_id] = session
         return session

@@ -6,7 +6,7 @@ from pathlib import Path
 from typing import AsyncGenerator, List, Optional
 
 from dotenv import load_dotenv
-from fastapi import Body, FastAPI
+from fastapi import Body, FastAPI, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import FileResponse, JSONResponse
 from fastapi.staticfiles import StaticFiles
@@ -49,6 +49,14 @@ class ChatRequest(BaseModel):
     model: Optional[str] = Field(None, description="Override model name for this request")
 
 
+class ToolActiveUpdate(BaseModel):
+    active: bool
+
+
+class ModelUpdate(BaseModel):
+    model: str
+
+
 @app.get("/health")
 async def health() -> dict:
     return {"status": "ok"}
@@ -70,9 +78,24 @@ async def list_tools() -> List[dict]:
     return manager.registry.summary()
 
 
+@app.post("/api/tools/{name}/active")
+async def set_tool_active(name: str, payload: ToolActiveUpdate) -> JSONResponse:
+    try:
+        manager.registry.set_active(name, payload.active)
+    except KeyError:
+        raise HTTPException(status_code=404, detail="Tool not found")
+    return JSONResponse({"name": name, "active": payload.active})
+
+
 @app.get("/api/model")
 async def get_model() -> dict:
-    return {"model": DEFAULT_MODEL}
+    return {"model": DEFAULT_MODEL, "available": ["gpt-5.1", "gpt-5-mini"]}
+
+
+@app.post("/api/model")
+async def set_model(payload: ModelUpdate) -> JSONResponse:
+    manager.current_model = payload.model
+    return JSONResponse({"model": manager.current_model, "available": ["gpt-5.1", "gpt-5-mini"]})
 
 
 @app.get("/api/chat/{chat_id}")

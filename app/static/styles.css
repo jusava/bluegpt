@@ -52,6 +52,77 @@ a { color: inherit; }
     padding: 16px;
 }
 
+.settings-panel {
+    position: fixed;
+    top: 0;
+    right: -320px;
+    width: 320px;
+    height: 100vh;
+    background: #ffffff;
+    border-left: 1px solid var(--border);
+    box-shadow: -6px 0 16px rgba(0, 0, 0, 0.08);
+    padding: 18px;
+    display: flex;
+    flex-direction: column;
+    gap: 14px;
+    transition: right 0.2s ease;
+    z-index: 2;
+}
+
+.settings-panel.open {
+    right: 0;
+}
+
+.settings-header {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+}
+
+.settings-content {
+    overflow-y: auto;
+    flex: 1;
+    display: flex;
+    flex-direction: column;
+    gap: 10px;
+}
+
+.tools-tree {
+    border: 1px solid var(--border);
+    border-radius: 12px;
+    padding: 10px;
+    background: #f9fbff;
+}
+
+.tool-group {
+    margin-bottom: 8px;
+}
+
+.tool-group-title {
+    font-weight: 700;
+    margin-bottom: 4px;
+}
+
+.tool-item {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    padding: 4px 0;
+}
+
+.tool-item.disabled {
+    opacity: 0.45;
+}
+
+.icon-btn {
+    border: none;
+    background: transparent;
+    cursor: pointer;
+    font-size: 18px;
+    line-height: 1;
+    color: var(--muted);
+}
+
 .sidebar {
     background: var(--sidebar);
     border: 1px solid var(--border);
@@ -212,6 +283,20 @@ a { color: inherit; }
 
 .toggle input[type="checkbox"] {
     accent-color: var(--accent);
+}
+
+.secondary-btn {
+    background: #fff;
+    border: 1px solid var(--border);
+    color: var(--text);
+    padding: 6px 10px;
+    border-radius: 10px;
+    cursor: pointer;
+    font-weight: 600;
+}
+
+.secondary-btn:hover {
+    border-color: var(--accent);
 }
 
 .dot {
