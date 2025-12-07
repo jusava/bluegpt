@@ -3,7 +3,7 @@ import logging
 import os
 import uuid
 from dataclasses import dataclass, field
-from typing import Any, Awaitable, Callable, Dict, List, Optional
+from typing import Any, AsyncGenerator, Awaitable, Callable, Dict, List, Optional
 
 from dotenv import load_dotenv
 from fastapi import HTTPException
@@ -75,37 +75,31 @@ class AgentSession:
             self.messages.append({"role": "system", "content": self.system_prompt})
 
     async def run(self, user_message: str) -> str:
-        return await self.stream_run(user_message)
-
-    async def stream_run(
-        self,
-        user_message: str,
-        on_event: Optional[Callable[[Dict[str, Any]], Awaitable[None] | None]] = None,
-    ) -> str:
-        self.messages.append({"role": "user", "content": user_message})
-        reply = await self._generate(on_event=on_event)
+        # Collect all chunks from the stream for the final reply
+        reply = ""
+        async for event in self.stream_run(user_message):
+            if event["type"] == "text":
+                reply += event["content"]
         return reply
 
-    async def _generate(
-        self,
-        on_event: Optional[Callable[[Dict[str, Any]], Awaitable[None] | None]] = None,
-    ) -> str:
-        tools: List[Dict[str, Any]] = self.registry.list_for_responses() or []
-        tools_param = tools or None
-        input_list: List[Any] = self.messages
+    async def stream_run(self, user_message: str) -> AsyncGenerator[Dict[str, Any], None]:
+        self.messages.append({"role": "user", "content": user_message})
+        async for event in self._generate():
+            yield event
 
-        client = get_client()
-
-        if on_event is not None:
-            async def do_on_event(event: Dict[str, Any]) -> None:
-                await on_event(event)
-        else:
-            async def do_on_event(event: Dict[str, Any]) -> None:
-                pass
-
-        # Execute tool loop until the model stops requesting tools.
+    async def _generate(self) -> AsyncGenerator[Dict[str, Any], None]:
+        # Local loop for tool calls
         while True:
+            tools: List[Dict[str, Any]] = self.registry.list_for_responses() or []
+            tools_param = tools or None
+            input_list: List[Any] = self.messages
+
+            client = get_client()
+            logger.info("Values: model=%s effort=%s", self.model, self.reasoning_effort)
+            # yield {"type": "text", "content": f"[DEBUG] Model: {self.model}, Effort: {self.reasoning_effort}\n\n"}
+            
             logger.debug("Creating response with model=%s tools=%d", self.model, len(tools or []))
+            
             response = await client.responses.create(
                 model=self.model,
                 input=input_list,
@@ -114,42 +108,34 @@ class AgentSession:
                 max_output_tokens=self.max_output_tokens,
             )
 
+            # Update input list with new items
             input_list.extend(response.output)
 
             called_tools = False
 
             for item in response.output:
                 if item.type == "reasoning":
-                    await do_on_event({"type": "reasoning", "reasoning": item.model_dump(exclude_none=True)})
+                    yield {"type": "reasoning", "reasoning": item.model_dump(exclude_none=True)}
                     continue
+                
                 if item.type == "function_call":
                     call_id, name, args = _parse_tool_call(item)
-                    schema = self.registry.get(name).as_response_tool()["parameters"]
-                    logger.debug("Tool call requested: %s args=%s expected_schema=%s", name, args, schema)
+                    yield {"type": "tool_start", "name": name, "arguments": args}
 
-                    # Pre-validate required args to give the model actionable feedback.
-                    required_fields = schema.get("required", [])
-                    missing = [
-                        field for field in required_fields
-                        if field not in args or args[field] in (None, "")
-                    ]
-                    await do_on_event({"type": "tool_start", "name": name, "arguments": args})
-
-                    if missing:
-                        result = f"Missing required arguments for {name}: {', '.join(missing)}. Please retry with values."
-                    else:
-                        result = await self.registry.execute(name, args)
-
-                    await do_on_event({"type": "tool_result", "name": name, "arguments": args, "output": result})
+                    result = await self.registry.execute(name, args)
+                    yield {"type": "tool_result", "name": name, "output": result}
+                    
+                    # Append result to input list for next turn
                     input_list.append({"type": "function_call_output", "call_id": call_id, "output": str(result)})
                     called_tools = True
 
             if called_tools:
-                # Loop again with updated input_list containing function_call_output entries.
                 continue
 
+            # Final text response
             input_list.append({"role": "assistant", "content": response.output_text})
-            return response.output_text
+            yield {"type": "text", "content": response.output_text}
+            return
 
 
 class AgentManager:
@@ -170,7 +156,13 @@ class AgentManager:
         model: str = DEFAULT_MODEL,
     ) -> AgentSession:
         if chat_id and chat_id in self.sessions:
-            return self.sessions[chat_id]
+            session = self.sessions[chat_id]
+            # Update session with current manager settings to ensure propagation
+            session.model = model or self.current_model
+            session.reasoning_effort = self.reasoning_effort
+            session.text_verbosity = self.text_verbosity
+            session.max_output_tokens = self.max_output_tokens
+            return session
 
         new_chat_id = chat_id or str(uuid.uuid4())
         session = AgentSession(

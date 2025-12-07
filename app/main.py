@@ -3,19 +3,20 @@ import json
 import logging
 import os
 from pathlib import Path
-from typing import AsyncGenerator, List, Optional
+from typing import AsyncGenerator, List
 
 from dotenv import load_dotenv
 from fastapi import Body, FastAPI, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import FileResponse, JSONResponse
 from fastapi.staticfiles import StaticFiles
-from pydantic import BaseModel, Field
 from sse_starlette.sse import EventSourceResponse
 import uvicorn
 
 from .agent import AgentManager, AVAILABLE_MODELS, DEFAULT_SYSTEM_PROMPT, DEFAULT_REASONING, DEFAULT_VERBOSITY, DEFAULT_MAX_OUTPUT_TOKENS
 from .config import load_samples_config
+from .schemas import ChatRequest, ToolActiveUpdate, ModelUpdate, GenerationUpdate
+from .utils import chunk_text
 
 load_dotenv()
 
@@ -40,27 +41,6 @@ app.mount("/static", StaticFiles(directory=static_dir), name="static")
 manager = AgentManager()
 logger.info("Tool registry loaded: %s", manager.registry.summary())
 SAMPLES = load_samples_config()
-
-
-class ChatRequest(BaseModel):
-    message: str = Field(..., description="User message text")
-    chat_id: Optional[str] = Field(None, description="Existing chat identifier")
-    system_prompt: Optional[str] = Field(None, description="Override system prompt for a new chat")
-    model: Optional[str] = Field(None, description="Override model name for this request")
-
-
-class ToolActiveUpdate(BaseModel):
-    active: bool
-
-
-class ModelUpdate(BaseModel):
-    model: str
-
-
-class GenerationUpdate(BaseModel):
-    reasoning_effort: str
-    text_verbosity: str
-    max_output_tokens: int
 
 
 @app.get("/health")
@@ -185,23 +165,6 @@ async def chat(request: ChatRequest) -> JSONResponse:
     )
 
 
-def _chunk_text(text: str) -> List[str]:
-    # Chunk by a reasonable size but prefer to split on newlines when possible.
-    if not text:
-        return [""]
-    parts: List[str] = []
-    buffer = ""
-    for line in text.splitlines(keepends=True):
-        if len(buffer) + len(line) > 400:
-            parts.append(buffer)
-            buffer = line
-        else:
-            buffer += line
-    if buffer:
-        parts.append(buffer)
-    return parts or [text]
-
-
 @app.post("/api/chat/stream")
 async def chat_stream(request: ChatRequest = Body(...)) -> EventSourceResponse:
     session = manager.get_or_create(
@@ -211,26 +174,16 @@ async def chat_stream(request: ChatRequest = Body(...)) -> EventSourceResponse:
     )
 
     async def event_generator() -> AsyncGenerator[dict, None]:
-        queue: asyncio.Queue[dict] = asyncio.Queue()
-
-        async def on_event(payload: dict) -> None:
-            await queue.put(payload)
-
-        task = asyncio.create_task(session.stream_run(request.message, on_event=on_event))
-
-        while True:
-            if task.done() and queue.empty():
-                break
-            try:
-                payload = await asyncio.wait_for(queue.get(), timeout=0.05)
-                yield {"event": payload.get("type", "status"), "data": json.dumps(payload)}
-            except asyncio.TimeoutError:
-                pass
-
-        reply = await task
-        for chunk in _chunk_text(reply):
-            yield {"data": chunk}
-            await asyncio.sleep(0.015)
+        async for event in session.stream_run(request.message):
+            if event["type"] == "text":
+                # Chunking logic for "Fake Streaming" feel
+                content = event["content"]
+                for chunk in chunk_text(content):
+                    yield {"data": chunk}
+                    await asyncio.sleep(0.015)
+            elif event["type"] in ("tool_start", "tool_result", "reasoning"):
+                yield {"event": event["type"], "data": json.dumps(event)}
+        
         yield {"event": "done", "data": session.chat_id}
 
     return EventSourceResponse(event_generator())
