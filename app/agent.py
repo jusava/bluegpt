@@ -20,7 +20,7 @@ DEFAULT_SYSTEM_PROMPT = (
     "You are BlueGPT, a concise assistant. Use provided tools when they improve factual accuracy. "
     "Keep answers brief but helpful. If a tool call fails, explain the failure and continue."
 )
-DEFAULT_MODEL = os.getenv("OPENAI_MODEL", "gpt-4o-mini")
+DEFAULT_MODEL = os.getenv("OPENAI_MODEL", "gpt-5.1")
 
 _client: Optional[AsyncOpenAI] = None
 
@@ -70,10 +70,7 @@ def _parse_tool_call(call: Any) -> tuple[str, str, Dict[str, Any]]:
     else:
         name = getattr(call, "name", None) or call.get("name") or "unknown_tool"
         raw_args = getattr(call, "arguments", None) or call.get("arguments") or "{}"
-    try:
-        args = json.loads(raw_args) if isinstance(raw_args, str) else dict(raw_args)
-    except Exception:  # noqa: BLE001
-        args = {}
+    args = json.loads(raw_args) if isinstance(raw_args, str) else dict(raw_args)
     return call_id, name, args
 
 
@@ -123,6 +120,7 @@ class AgentSession:
     system_prompt: str = DEFAULT_SYSTEM_PROMPT
     model: str = DEFAULT_MODEL
     messages: List[Dict[str, Any]] = field(default_factory=list)
+    tool_trace: List[Dict[str, Any]] = field(default_factory=list)
 
     def __post_init__(self) -> None:
         if not self.messages:
@@ -130,6 +128,7 @@ class AgentSession:
 
     async def run(self, user_message: str) -> str:
         self.messages.append({"role": "user", "content": user_message})
+        self.tool_trace = []
         reply = await self._generate()
         self.messages.append({"role": "assistant", "content": reply})
         return reply
@@ -142,16 +141,12 @@ class AgentSession:
 
         # Execute tool loop until the model stops requesting tools.
         while True:
-            try:
-                logger.debug("Creating response with model=%s tools=%d", self.model, len(tools or []))
-                response = await client.responses.create(
-                    model=self.model,
-                    input=input_list,
-                    tools=tools,
-                )
-            except Exception as exc:  # noqa: BLE001
-                logger.exception("OpenAI responses.create failed")
-                raise
+            logger.debug("Creating response with model=%s tools=%d", self.model, len(tools or []))
+            response = await client.responses.create(
+                model=self.model,
+                input=input_list,
+                tools=tools,
+            )
 
             required_action = getattr(response, "required_action", None)
             tool_calls = _extract_tool_calls(required_action) or _extract_tool_calls_from_output(getattr(response, "output", None))
@@ -161,13 +156,25 @@ class AgentSession:
                 tool_outputs: List[Dict[str, Any]] = []
                 for call in tool_calls:
                     call_id, name, args = _parse_tool_call(call)
-                    logger.debug("Tool call requested: %s args=%s", name, args)
-
                     try:
+                        schema = self.registry.get(name).as_response_tool().get("input_schema")
+                    except Exception:
+                        schema = None
+                    logger.debug("Tool call requested: %s args=%s expected_schema=%s", name, args, schema)
+
+                    # Pre-validate required args to give the model actionable feedback.
+                    missing: list[str] = []
+                    if schema and isinstance(schema, dict):
+                        required_fields = schema.get("required") or []
+                        if isinstance(required_fields, list):
+                            missing = [
+                                field for field in required_fields if field not in args or args[field] in (None, "")
+                            ]
+                    if missing:
+                        result = f"Missing required arguments for {name}: {', '.join(missing)}. Please retry with values."
+                    else:
                         result = await self.registry.execute(name, args)
-                    except Exception as exc:  # noqa: BLE001
-                        logger.exception("Tool %s failed", name)
-                        result = f"Tool {name} failed: {exc}"
+                    self.tool_trace.append({"name": name, "arguments": args, "output": result})
 
                     tool_outputs.append({"type": "function_call_output", "call_id": call_id, "output": str(result)})
                     input_list.append(tool_outputs[-1])
@@ -177,11 +184,7 @@ class AgentSession:
 
             text = getattr(response, "output_text", None) or _extract_text(response)
             if text is None:
-                raw = None
-                try:
-                    raw = response.model_dump()
-                except Exception:  # noqa: BLE001
-                    raw = str(response)
+                raw = response.model_dump()
                 logger.error("Model returned no text response. Raw response: %s", raw)
                 raise HTTPException(status_code=500, detail="Model returned no text response.")
             input_list.append({"role": "assistant", "content": text})

@@ -15,7 +15,7 @@ cwd = "."
 
 # Example FastMCP stdio tool (manual tool definition)
 # [[mcp.stdio_tools]]
-# name = "utc_time"
+# name = "current_time"
 # description = "UTC via FastMCP stdio"
 # command = "fastmcp"
 # args = ["run", "app/mcp_fast_time.py:mcp"]

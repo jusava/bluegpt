@@ -6,7 +6,7 @@ This document captures how the agentic flow in BlueGPT works, how tools are disc
 
 - **Frontend:** Chat-style UI (`app/static/*`) that calls `/api/chat/stream` for streaming completions and `/api/chat` as a fallback.
 - **Backend:** FastAPI (`app/main.py`) with an `AgentManager`/`AgentSession` (`app/agent.py`) that orchestrates OpenAI Responses API calls and tool loops.
-- **Tools:** Collected in a `ToolRegistry` (`app/tools.py`); includes built-ins plus optional MCP tools (HTTP or FastMCP stdio). Tools are exposed to OpenAI via function/tool schemas.
+- **Tools:** Collected in a `ToolRegistry` (`app/tools.py`); includes optional MCP tools (HTTP or FastMCP stdio) discovered from config. Tools are exposed to OpenAI via function/tool schemas.
 
 ## Request Flow
 
@@ -23,25 +23,11 @@ This document captures how the agentic flow in BlueGPT works, how tools are disc
 
 Tool sources are merged into a single registry on startup:
 
-- **Built-in:** `utc_time` (returns current UTC).
-- **HTTP MCP tools:** via `MCP_HTTP_TOOLS` (JSON) or `mcp.toml` (`[[mcp.http]]`).
-- **FastMCP stdio (auto-discovery):**
-  - Env: `MCP_STDIO_SERVERS` (JSON array).
-  - Config: `[[mcp.stdio_servers]]` in `mcp.toml`.
-  - The server is launched via stdio using the provided `command/args/env/cwd`; tools are discovered with `list_tools` and registered (optional `prefix` applied).
-- **FastMCP stdio (manual tools):**
-  - Env: `MCP_STDIO_TOOLS`.
-  - Config: `[[mcp.stdio_tools]]` in `mcp.toml`.
-  - Each entry defines a tool and how to launch the server.
+- **Built-in:** none by default.
+- **FastMCP stdio:** Config: `[[mcp.stdio_servers]]` in `mcp.toml`. The server is launched via stdio using the provided `command/args/env/cwd`; tools are discovered with `list_tools` and registered (optional `prefix` applied). No manual tool definitions.
 
-Order of loading (later entries do not override earlier unless the tool name matches):
-1. Built-in `utc_time`.
-2. `MCP_HTTP_TOOLS` env.
-3. `mcp.toml` http tools.
-4. `MCP_STDIO_SERVERS` env (auto-discovered).
-5. `mcp.toml` stdio_servers (auto-discovered).
-6. `MCP_STDIO_TOOLS` env (manual).
-7. `mcp.toml` stdio_tools (manual).
+Order of loading (later entries do not override earlier unless the tool name matches), all from config:
+1. `mcp.toml` stdio_servers (auto-discovered).
 
 ## Config Files and Env
 
@@ -51,34 +37,15 @@ Order of loading (later entries do not override earlier unless the tool name mat
 
 ## FastMCP Quickstart (stdio)
 
-Sample server: `app/mcp_fast_time.py` (tool: `utc_time`).
+Sample server: `app/mcp_fast_time.py` (tools: `current_time`, `find_timezone`).
 
-Config options:
-- Auto-discover tools from server:
-  ```bash
-  export MCP_STDIO_SERVERS='[
-    {"command":"fastmcp","args":["run","app/mcp_fast_time.py:mcp"],"prefix":""}
-  ]'
-  ```
-  or in `mcp.toml`:
-  ```toml
-  [[mcp.stdio_servers]]
-  command = "fastmcp"
-  args = ["run", "app/mcp_fast_time.py:mcp"]
-  prefix = ""
-  ```
-- Manual tool registration:
-  ```bash
-  export MCP_STDIO_TOOLS='[
-    {
-      "name": "utc_time",
-      "description": "UTC via FastMCP stdio",
-      "command": "fastmcp",
-      "args": ["run", "app/mcp_fast_time.py:mcp"],
-      "parameters": { "type": "object", "properties": {}, "additionalProperties": false }
-    }
-  ]'
-  ```
+Config options (auto-discover only):
+```toml
+[[mcp.stdio_servers]]
+command = "fastmcp"
+args = ["run", "app/mcp_fast_time.py:mcp"]
+prefix = ""
+```
 
 ## Running Locally
 

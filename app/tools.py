@@ -2,14 +2,12 @@ import asyncio
 import json
 import logging
 import os
+import subprocess
 import threading
 import tomllib
 from dataclasses import dataclass, field
-from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Awaitable, Callable, Dict, List, Optional
-
-import httpx
 
 logger = logging.getLogger(__name__)
 
@@ -31,49 +29,144 @@ class AgentTool:
             result = await result
         return str(result)
 
-    def as_openai_tool(self) -> Dict[str, Any]:
-        return {
-            "type": "function",
-            "function": {
-                "name": self.name,
-                "description": self.description,
-                "parameters": self.parameters,
-            },
-        }
-
     def as_response_tool(self) -> Dict[str, Any]:
-        # Responses API expects tool name/description at the top level.
         return {
             "type": "function",
             "name": self.name,
             "description": self.description,
-            # input_schema is the preferred field for the Responses API.
-            "input_schema": self.parameters,
+            "parameters": self.parameters,
         }
 
 
-class MCPHTTPTool(AgentTool):
-    """Adapter for calling a remote MCP server that exposes HTTP tool endpoints."""
+class MCPProcessClient:
+    """Persistent stdio client for a FastMCP server using subprocess.Popen."""
 
     def __init__(
         self,
-        name: str,
-        description: str,
-        parameters: Dict[str, Any],
-        endpoint: str,
+        command: str,
+        args: Optional[List[str]] = None,
+        env: Optional[Dict[str, str]] = None,
+        cwd: Optional[str] = None,
     ) -> None:
-        super().__init__(name=name, description=description, parameters=parameters, handler=self._call_remote)
-        self.endpoint = endpoint
-        self.source = "mcp-http"
+        self.command = command
+        self.args = args or []
+        self.env = env
+        self.cwd = cwd
+        self.msg_id = 0
+        self._lock = threading.Lock()
+        self.process = subprocess.Popen(
+            [self.command, *self.args],
+            stdin=subprocess.PIPE,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+            text=True,
+            bufsize=1,
+            env={**os.environ, **env} if env else None,
+            cwd=cwd,
+        )
+        self._handshake()
 
-    async def _call_remote(self, arguments: Dict[str, Any]) -> str:
-        async with httpx.AsyncClient(timeout=30) as client:
-            response = await client.post(self.endpoint, json={"tool": self.name, "arguments": arguments})
-            response.raise_for_status()
-            payload = response.json()
-            if isinstance(payload, dict) and "result" in payload:
-                return json.dumps(payload["result"]) if isinstance(payload["result"], (dict, list)) else str(payload["result"])
-            return json.dumps(payload)
+    def _send(self, method: str, params: Optional[Dict[str, Any]] = None, *, is_notification: bool = False) -> Optional[int]:
+        message: Dict[str, Any] = {"jsonrpc": "2.0", "method": method}
+        if params is not None:
+            message["params"] = params
+        if not is_notification:
+            self.msg_id += 1
+            message["id"] = self.msg_id
+        json_line = json.dumps(message) + "\n"
+        if not self.process.stdin:
+            raise RuntimeError("FastMCP process stdin is unavailable")
+        self.process.stdin.write(json_line)
+        self.process.stdin.flush()
+        return message.get("id")
+
+    def _receive(self) -> Dict[str, Any]:
+        if not self.process.stdout:
+            raise RuntimeError("FastMCP process stdout is unavailable")
+        line = self.process.stdout.readline()
+        if not line:
+            raise RuntimeError("FastMCP server closed the connection unexpectedly")
+        return json.loads(line)
+
+    def _handshake(self) -> None:
+        self._send(
+            "initialize",
+            {
+                "protocolVersion": "2024-11-05",
+                "capabilities": {},
+                "clientInfo": {"name": "bluegpt", "version": "1.0"},
+            },
+        )
+        init_response = self._receive()
+        if "error" in init_response:
+            raise RuntimeError(f"FastMCP initialize failed: {init_response['error']}")
+        self._send("notifications/initialized", is_notification=True)
+
+    def _await_response(self, target_id: int) -> Dict[str, Any]:
+        while True:
+            response = self._receive()
+            if response.get("id") == target_id:
+                return response
+
+    def list_tools(self) -> List[Dict[str, Any]]:
+        with self._lock:
+            req_id = self._send("tools/list")
+            if req_id is None:
+                raise RuntimeError("Failed to send tools/list request")
+            response = self._await_response(req_id)
+            if "error" in response:
+                raise RuntimeError(f"tools/list failed: {response['error']}")
+            result = response.get("result") or {}
+            return result.get("tools") or result
+
+    def call_tool(self, tool_name: str, arguments: Dict[str, Any]) -> str:
+        with self._lock:
+            req_id = self._send("tools/call", {"name": tool_name, "arguments": arguments})
+            if req_id is None:
+                raise RuntimeError("Failed to send tools/call request")
+            response = self._await_response(req_id)
+            if "error" in response:
+                raise RuntimeError(response["error"].get("message") or "tools/call failed")
+            result = response.get("result") or {}
+            content = result.get("content")
+            if isinstance(content, list) and content:
+                text = content[0].get("text") or content[0].get("value")
+                if text is not None:
+                    return str(text)
+            return json.dumps(result)
+
+    @property
+    def is_running(self) -> bool:
+        return self.process.poll() is None
+
+    def close(self) -> None:
+        if self.process.stdin:
+            self.process.stdin.close()
+        if self.process.stdout:
+            self.process.stdout.close()
+        if self.process.stderr:
+            self.process.stderr.close()
+        self.process.terminate()
+
+
+_CLIENT_CACHE: Dict[tuple, MCPProcessClient] = {}
+_CLIENT_CACHE_LOCK = threading.Lock()
+
+
+def _client_cache_key(command: str, args: Optional[List[str]], env: Optional[Dict[str, str]], cwd: Optional[str]) -> tuple:
+    env_items = tuple(sorted((env or {}).items()))
+    return (command, tuple(args or []), env_items, cwd)
+
+
+def _get_process_client(command: str, args: Optional[List[str]], env: Optional[Dict[str, str]], cwd: Optional[str]) -> MCPProcessClient:
+    key = _client_cache_key(command, args, env, cwd)
+    with _CLIENT_CACHE_LOCK:
+        client = _CLIENT_CACHE.get(key)
+        if client and client.is_running:
+            return client
+        client = MCPProcessClient(command, args, env, cwd)
+        _CLIENT_CACHE[key] = client
+        return client
 
 
 class FastMCPStdioTool(AgentTool):
@@ -97,20 +190,12 @@ class FastMCPStdioTool(AgentTool):
         super().__init__(name=name, description=description, parameters=parameters, handler=self._call_stdio)
         self.source = "mcp-stdio"
 
-    async def _call_stdio(self, arguments: Dict[str, Any]) -> str:
-        try:
-            from fastmcp import Client
-            from fastmcp.client.transports import StdioTransport
-        except Exception as exc:  # noqa: BLE001
-            raise RuntimeError("fastmcp is not installed. Please add fastmcp to your environment.") from exc
+    def _client(self) -> MCPProcessClient:
+        return _get_process_client(self.command, self.args, self.env, self.cwd)
 
-        transport = StdioTransport(command=self.command, args=self.args, env=self.env, cwd=self.cwd)
-        client = Client(transport)
-        async with client:
-            result = await client.call_tool(self.name, arguments or {})
-        if isinstance(result, (dict, list)):
-            return json.dumps(result)
-        return str(result)
+    async def _call_stdio(self, arguments: Dict[str, Any]) -> str:
+        client = self._client()
+        return await asyncio.to_thread(client.call_tool, self.name, arguments or {})
 
 
 class ToolRegistry:
@@ -119,13 +204,15 @@ class ToolRegistry:
 
     def register(self, tool: AgentTool) -> None:
         self._tools[tool.name] = tool
-        logger.debug("Registered tool %s (source=%s)", tool.name, tool.source)
-
-    def list_for_openai(self) -> List[Dict[str, Any]]:
-        return [tool.as_openai_tool() for tool in self._tools.values()]
+        logger.debug("Registered tool %s (source=%s) schema=%s", tool.name, tool.source, tool.as_response_tool())
 
     def list_for_responses(self) -> List[Dict[str, Any]]:
         return [tool.as_response_tool() for tool in self._tools.values()]
+
+    def get(self, name: str) -> AgentTool:
+        if name not in self._tools:
+            raise KeyError(f"Tool '{name}' is not registered")
+        return self._tools[name]
 
     async def execute(self, name: str, arguments: Dict[str, Any]) -> str:
         if name not in self._tools:
@@ -139,337 +226,54 @@ class ToolRegistry:
         ]
 
 
-def _build_time_tool() -> AgentTool:
-    def current_time(_: Dict[str, Any]) -> str:
-        return datetime.now(timezone.utc).isoformat()
-
-    return AgentTool(
-        name="utc_time",
-        description="Returns the current UTC time in ISO-8601 format.",
-        parameters={"type": "object", "properties": {}, "additionalProperties": False},
-        handler=current_time,
-    )
-
-
-def _load_mcp_tools_from_env() -> List[AgentTool]:
-    """Load MCP HTTP tools from MCP_HTTP_TOOLS env var if provided.
-
-    Expected format:
-    [
-      {"name": "docs_search", "description": "Search docs", "endpoint": "http://localhost:9000/tools/docs_search",
-       "parameters": {...}}
-    ]
-    """
-    raw = os.getenv("MCP_HTTP_TOOLS")
-    if not raw:
-        return []
-
-    try:
-        definitions = json.loads(raw)
-    except json.JSONDecodeError:
-        logger.warning("MCP_HTTP_TOOLS is not valid JSON; skipping MCP tool registration.")
-        return []
-
-    tools: List[AgentTool] = []
-    for item in definitions:
-        try:
-            tools.append(
-                MCPHTTPTool(
-                    name=item["name"],
-                    description=item.get("description", "External MCP tool"),
-                    parameters=item.get("parameters", {"type": "object"}),
-                    endpoint=item["endpoint"],
-                )
-            )
-        except KeyError as exc:
-            logger.warning("Skipping MCP tool definition missing field %s: %s", exc, item)
-    return tools
-
-
-def _load_mcp_tools_from_config(config: Dict[str, Any]) -> List[AgentTool]:
-    tools: List[AgentTool] = []
-    for item in config.get("http", []):
-        try:
-            tools.append(
-                MCPHTTPTool(
-                    name=item["name"],
-                    description=item.get("description", "External MCP tool"),
-                    parameters=item.get("parameters", {"type": "object"}),
-                    endpoint=item["endpoint"],
-                )
-            )
-        except KeyError as exc:
-            logger.warning("Skipping HTTP tool missing field %s: %s", exc, item)
-    return tools
-
-
-def _discover_fastmcp_stdio_servers_from_env() -> List[AgentTool]:
-    """Discover tools from FastMCP stdio servers defined in MCP_STDIO_SERVERS."""
-    raw = os.getenv("MCP_STDIO_SERVERS")
-    if not raw:
-        return []
-
-    try:
-        definitions = json.loads(raw)
-    except json.JSONDecodeError:
-        logger.warning("MCP_STDIO_SERVERS is not valid JSON; skipping FastMCP stdio discovery.")
-        return []
-
-    try:
-        from fastmcp import Client
-        from fastmcp.client.transports import StdioTransport
-    except Exception as exc:  # noqa: BLE001
-        logger.warning("fastmcp not available; cannot discover MCP_STDIO_SERVERS: %s", exc)
-        return []
-
-    discovered: List[AgentTool] = []
-
-    async def fetch_tools(transport: Any) -> List[Any]:
-        client = Client(transport)
-        async with client:
-            return await client.list_tools()
-
-    def _tfield(tool_def: Any, attr: str) -> Any:
-        if hasattr(tool_def, attr):
-            return getattr(tool_def, attr)
-        if isinstance(tool_def, dict):
-            return tool_def.get(attr)
-        return None
-
-    async def handle_one(item: Dict[str, Any]) -> None:
-        try:
-            transport = StdioTransport(
-                command=item["command"],
-                args=item.get("args") or [],
-                env=item.get("env"),
-                cwd=item.get("cwd"),
-            )
-            prefix = ""  # avoid prefixing tool names to keep server/tool names aligned
-            tools = await fetch_tools(transport)
-            for tool_def in tools:
-                base_name = _tfield(tool_def, "name")
-                if not base_name:
-                    logger.warning("Skipping FastMCP stdio tool with missing name: %s", tool_def)
-                    continue
-                name = f"{prefix}{base_name}"
-                description = _tfield(tool_def, "description") or ""
-                params = (
-                    _tfield(tool_def, "input_schema")
-                    or _tfield(tool_def, "parameters")
-                    or {"type": "object"}
-                )
-                discovered.append(
-                    FastMCPStdioTool(
-                        name=name,
-                        description=description or "FastMCP stdio tool",
-                        parameters=params,
-                        command=item["command"],
-                        args=item.get("args") or [],
-                        env=item.get("env"),
-                        cwd=item.get("cwd"),
-                    )
-                )
-        except KeyError as exc:
-            logger.warning("Skipping FastMCP stdio server missing field %s: %s", exc, item)
-        except Exception as exc:  # noqa: BLE001
-            logger.warning("Failed to discover tools from FastMCP stdio server %s: %s", item, exc)
-
-    async def gather_all() -> None:
-        await asyncio.gather(*(handle_one(item) for item in definitions))
-
-    def run_blocking(coro: Any) -> None:
-        try:
-            asyncio.get_running_loop()
-        except RuntimeError:
-            asyncio.run(coro)
-            return
-
-        result: Dict[str, Any] = {}
-        exc: Dict[str, BaseException] = {}
-
-        def _runner() -> None:
-            try:
-                asyncio.run(coro)
-            except BaseException as e:  # noqa: BLE001
-                exc["error"] = e
-
-        thread = threading.Thread(target=_runner, daemon=True)
-        thread.start()
-        thread.join()
-        if "error" in exc:
-            raise exc["error"]
-
-    try:
-        run_blocking(gather_all())
-    except Exception as exc:  # noqa: BLE001
-        logger.warning("Failed to discover tools from MCP_STDIO_SERVERS: %s", exc)
-
-    return discovered
-
-
 def _discover_fastmcp_stdio_servers_from_config(config: Dict[str, Any]) -> List[AgentTool]:
     servers = config.get("stdio_servers", [])
     if not servers:
         return []
 
-    try:
-        from fastmcp import Client
-        from fastmcp.client.transports import StdioTransport
-    except Exception as exc:  # noqa: BLE001
-        logger.warning("fastmcp not available; cannot discover MCP stdio servers from config: %s", exc)
-        return []
-
-    async def fetch_tools(transport: Any) -> List[Any]:
-        client = Client(transport)
-        async with client:
-            return await client.list_tools()
-
-    discovered: List[AgentTool] = []
+    def _camel(s: str) -> str:
+        parts = s.split("_")
+        return parts[0] + "".join(p.capitalize() for p in parts[1:])
 
     def _tfield(tool_def: Any, attr: str) -> Any:
         if hasattr(tool_def, attr):
             return getattr(tool_def, attr)
         if isinstance(tool_def, dict):
-            return tool_def.get(attr)
+            return tool_def.get(attr) or tool_def.get(_camel(attr))
         return None
 
-    async def handle_one(item: Dict[str, Any]) -> None:
-        try:
-            transport = StdioTransport(
-                command=item["command"],
-                args=item.get("args") or [],
-                env=item.get("env"),
-                cwd=item.get("cwd"),
+    discovered: List[AgentTool] = []
+
+    def handle_one(item: Dict[str, Any]) -> None:
+        client = _get_process_client(item["command"], item.get("args") or [], item.get("env"), item.get("cwd"))
+        prefix = ""  # avoid prefixing tool names to keep server/tool names aligned
+        tools = client.list_tools()
+        for tool_def in tools:
+            base_name = _tfield(tool_def, "name")
+            if not base_name:
+                raise ValueError(f"MCP stdio tool missing name: {tool_def}")
+            name = f"{prefix}{base_name}"
+            description = _tfield(tool_def, "description") or ""
+            params = _tfield(tool_def, "input_schema") or _tfield(tool_def, "parameters") or {"type": "object", "additionalProperties": True}
+            discovered.append(
+                FastMCPStdioTool(
+                    name=name,
+                    description=description or "FastMCP stdio tool",
+                    parameters=params,
+                    command=item["command"],
+                    args=item.get("args") or [],
+                    env=item.get("env"),
+                    cwd=item.get("cwd"),
+                )
             )
-            prefix = ""  # avoid prefixing tool names to keep server/tool names aligned
-            tools = await fetch_tools(transport)
-            for tool_def in tools:
-                base_name = _tfield(tool_def, "name")
-                if not base_name:
-                    logger.warning("Skipping MCP stdio tool with missing name: %s", tool_def)
-                    continue
-                name = f"{prefix}{base_name}"
-                description = _tfield(tool_def, "description") or ""
-                params = (
-                    _tfield(tool_def, "input_schema")
-                    or _tfield(tool_def, "parameters")
-                    or {"type": "object"}
-                )
-                discovered.append(
-                    FastMCPStdioTool(
-                        name=name,
-                        description=description or "FastMCP stdio tool",
-                        parameters=params,
-                        command=item["command"],
-                        args=item.get("args") or [],
-                        env=item.get("env"),
-                        cwd=item.get("cwd"),
-                    )
-                )
-        except KeyError as exc:
-            logger.warning("Skipping MCP stdio server in config missing field %s: %s", exc, item)
-        except Exception as exc:  # noqa: BLE001
-            logger.warning("Failed to discover tools from MCP stdio server %s: %s", item, exc)
 
-    async def gather_all() -> None:
-        await asyncio.gather(*(handle_one(item) for item in servers))
-
-    def run_blocking(coro: Any) -> None:
-        try:
-            asyncio.get_running_loop()
-        except RuntimeError:
-            asyncio.run(coro)
-            return
-
-        exc: Dict[str, BaseException] = {}
-
-        def _runner() -> None:
-            try:
-                asyncio.run(coro)
-            except BaseException as e:  # noqa: BLE001
-                exc["error"] = e
-
-        thread = threading.Thread(target=_runner, daemon=True)
-        thread.start()
-        thread.join()
-        if "error" in exc:
-            raise exc["error"]
-
-    try:
-        run_blocking(gather_all())
-    except Exception as exc:  # noqa: BLE001
-        logger.warning("Failed to discover tools from MCP stdio servers in config: %s", exc)
-
+    for item in servers:
+        handle_one(item)
     return discovered
 
 
-def _load_fastmcp_stdio_tools_from_env() -> List[AgentTool]:
-    """Load FastMCP stdio tools from MCP_STDIO_TOOLS env var if provided.
-
-    Expected format (example):
-    [
-      {
-        "name": "utc_time",
-        "description": "UTC time via FastMCP stdio server",
-        "command": "uv",
-        "args": ["run", "app/mcp_fast_time.py"],
-        "parameters": {"type": "object", "properties": {}, "additionalProperties": false},
-        "env": {},      # optional
-        "cwd": "."      # optional
-      }
-    ]
-    """
-    raw = os.getenv("MCP_STDIO_TOOLS")
-    if not raw:
-        return []
-
-    try:
-        definitions = json.loads(raw)
-    except json.JSONDecodeError:
-        logger.warning("MCP_STDIO_TOOLS is not valid JSON; skipping FastMCP stdio tool registration.")
-        return []
-
-    tools: List[AgentTool] = []
-    for item in definitions:
-        try:
-            tools.append(
-                FastMCPStdioTool(
-                    name=item["name"],
-                    description=item.get("description", "FastMCP stdio tool"),
-                    parameters=item.get("parameters", {"type": "object"}),
-                    command=item["command"],
-                    args=item.get("args") or [],
-                    env=item.get("env"),
-                    cwd=item.get("cwd"),
-                )
-            )
-        except KeyError as exc:
-            logger.warning("Skipping FastMCP stdio tool definition missing field %s: %s", exc, item)
-        except Exception as exc:  # noqa: BLE001
-            logger.warning("Failed to register FastMCP stdio tool %s: %s", item.get("name"), exc)
-    return tools
-
-
 def _load_fastmcp_stdio_tools_from_config(config: Dict[str, Any]) -> List[AgentTool]:
-    tools: List[AgentTool] = []
-    for item in config.get("stdio_tools", []):
-        try:
-            tools.append(
-                FastMCPStdioTool(
-                    name=item["name"],
-                    description=item.get("description", "FastMCP stdio tool"),
-                    parameters=item.get("parameters", {"type": "object"}),
-                    command=item["command"],
-                    args=item.get("args") or [],
-                    env=item.get("env"),
-                    cwd=item.get("cwd"),
-                )
-            )
-        except KeyError as exc:
-            logger.warning("Skipping FastMCP stdio tool in config missing field %s: %s", exc, item)
-        except Exception as exc:  # noqa: BLE001
-            logger.warning("Failed to register FastMCP stdio tool from config %s: %s", item.get("name"), exc)
-    return tools
+    return []
 
 
 def _load_mcp_config() -> Dict[str, Any]:
@@ -477,30 +281,16 @@ def _load_mcp_config() -> Dict[str, Any]:
     path = Path(os.getenv("MCP_CONFIG_FILE", "mcp.toml"))
     if not path.exists():
         return {}
-    try:
-        return tomllib.loads(path.read_text())
-    except Exception as exc:  # noqa: BLE001
-        logger.warning("Failed to load MCP config file %s: %s", path, exc)
-        return {}
+    return tomllib.loads(path.read_text())
 
 
 def build_default_registry() -> ToolRegistry:
     registry = ToolRegistry()
-    registry.register(_build_time_tool())
     config = _load_mcp_config().get("mcp", {})
 
-    for mcp_tool in _load_mcp_tools_from_env():
-        registry.register(mcp_tool)
-    for mcp_tool in _load_mcp_tools_from_config(config):
-        registry.register(mcp_tool)
-
-    for stdio_server_tool in _discover_fastmcp_stdio_servers_from_env():
-        registry.register(stdio_server_tool)
     for stdio_server_tool in _discover_fastmcp_stdio_servers_from_config(config):
         registry.register(stdio_server_tool)
 
-    for stdio_tool in _load_fastmcp_stdio_tools_from_env():
-        registry.register(stdio_tool)
     for stdio_tool in _load_fastmcp_stdio_tools_from_config(config):
         registry.register(stdio_tool)
     return registry

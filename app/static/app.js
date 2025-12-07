@@ -3,11 +3,19 @@ const promptEl = document.getElementById('prompt');
 const formEl = document.getElementById('chat-form');
 const sendBtn = document.getElementById('send-btn');
 const newChatBtn = document.getElementById('new-chat');
+const showToolsToggle = document.getElementById('show-tools');
 const chatListEl = document.getElementById('chat-list');
 const suggestionButtons = document.querySelectorAll('.suggestion-card');
 
 let chatId = null;
 let streaming = false;
+let showTools = showToolsToggle ? showToolsToggle.checked : true;
+
+if (showToolsToggle) {
+    showToolsToggle.addEventListener('change', () => {
+        showTools = showToolsToggle.checked;
+    });
+}
 
 function scrollToBottom() {
     messagesEl.scrollTop = messagesEl.scrollHeight;
@@ -25,7 +33,9 @@ function addMessage(role, content, options = {}) {
 
     const avatar = document.createElement('div');
     avatar.className = 'avatar';
-    avatar.textContent = role === 'assistant' ? '🤖' : '🙂';
+    if (role === 'assistant') avatar.textContent = '🤖';
+    else if (role === 'tool') avatar.textContent = '🛠️';
+    else avatar.textContent = '🙂';
 
     const bubble = document.createElement('div');
     bubble.className = 'bubble';
@@ -133,11 +143,25 @@ async function sendMessage(text) {
             const dataLines = [];
             for (const line of lines) {
                 if (line.startsWith('event:')) event = line.slice(6).trim();
-                if (line.startsWith('data:')) dataLines.push(line.slice(5).trim());
+                if (line.startsWith('data:')) {
+                    let payload = line.slice(5);
+                    if (payload.startsWith(' ')) payload = payload.slice(1);
+                    dataLines.push(payload);
+                }
             }
-            const data = dataLines.join('\n');
+            const data = dataLines.join('');
 
             if (event === 'error') throw new Error(data || 'Stream error');
+            if (event === 'tools') {
+                if (data && showTools) {
+                    try {
+                        renderToolCalls(JSON.parse(data));
+                    } catch (e) {
+                        console.error('Failed to parse tool calls', e);
+                    }
+                }
+                return false;
+            }
             if (event === 'done') {
                 if (data) chatId = data;
                 stream.done();
@@ -186,6 +210,7 @@ async function sendMessage(text) {
         });
         const payload = await res.json();
         chatId = payload.chat_id;
+        if (showTools) renderToolCalls(payload.tool_calls || []);
         stream.append(payload.reply || 'No response.');
         stream.done();
     } finally {
@@ -230,3 +255,13 @@ suggestionButtons.forEach((btn) =>
 // seed welcome message
 addMessage('assistant', 'Hey! I am BlueGPT. I use OpenAI plus optional MCP tools via a local agentic loop. Ask me anything, or click a suggestion to start.');
 refreshSessions();
+
+function renderToolCalls(calls = []) {
+    if (!Array.isArray(calls) || !calls.length) return;
+    calls.forEach((call) => {
+        const args = JSON.stringify(call.arguments ?? {}, null, 2);
+        const output = typeof call.output === 'string' ? call.output : JSON.stringify(call.output, null, 2);
+        const content = `Tool: ${call.name || 'unknown'}\nArgs:\n${args}\nResult:\n${output}`;
+        addMessage('tool', content);
+    });
+}

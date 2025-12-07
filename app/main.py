@@ -1,16 +1,18 @@
 import asyncio
+import json
 import logging
 import os
 from pathlib import Path
 from typing import AsyncGenerator, List, Optional
 
 from dotenv import load_dotenv
-from fastapi import Body, FastAPI, HTTPException
+from fastapi import Body, FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import FileResponse, JSONResponse
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel, Field
 from sse_starlette.sse import EventSourceResponse
+import uvicorn
 
 from .agent import AgentManager, DEFAULT_MODEL, DEFAULT_SYSTEM_PROMPT
 
@@ -74,19 +76,20 @@ async def get_chat(chat_id: str) -> JSONResponse:
 
 @app.post("/api/chat")
 async def chat(request: ChatRequest) -> JSONResponse:
-    try:
-        session = manager.get_or_create(
-            request.chat_id,
-            system_prompt=request.system_prompt or DEFAULT_SYSTEM_PROMPT,
-            model=request.model or DEFAULT_MODEL,
-        )
-        reply = await session.run(request.message)
-        return JSONResponse({"chat_id": session.chat_id, "reply": reply, "tools": manager.registry.summary()})
-    except HTTPException:
-        raise
-    except Exception as exc:  # noqa: BLE001
-        logger.exception("Chat request failed")
-        raise HTTPException(status_code=500, detail=str(exc))
+    session = manager.get_or_create(
+        request.chat_id,
+        system_prompt=request.system_prompt or DEFAULT_SYSTEM_PROMPT,
+        model=request.model or DEFAULT_MODEL,
+    )
+    reply = await session.run(request.message)
+    return JSONResponse(
+        {
+            "chat_id": session.chat_id,
+            "reply": reply,
+            "tools": manager.registry.summary(),
+            "tool_calls": session.tool_trace,
+        }
+    )
 
 
 def _chunk_text(text: str, size: int = 20) -> List[str]:
@@ -102,24 +105,18 @@ async def chat_stream(request: ChatRequest = Body(...)) -> EventSourceResponse:
     )
 
     async def event_generator() -> AsyncGenerator[dict, None]:
-        try:
-            reply = await session.run(request.message)
-            for chunk in _chunk_text(reply):
-                yield {"data": chunk}
-                await asyncio.sleep(0.015)
-            yield {"event": "done", "data": session.chat_id}
-        except HTTPException as exc:
-            yield {"event": "error", "data": exc.detail}
-        except Exception as exc:  # noqa: BLE001
-            yield {"event": "error", "data": str(exc)}
+        reply = await session.run(request.message)
+        yield {"event": "tools", "data": json.dumps(session.tool_trace)}
+        for chunk in _chunk_text(reply):
+            yield {"data": chunk}
+            await asyncio.sleep(0.015)
+        yield {"event": "done", "data": session.chat_id}
 
     return EventSourceResponse(event_generator())
 
 
 # Convenience for local dev server: uvicorn app.main:app --reload
 def run() -> None:
-    import uvicorn
-
     uvicorn.run(
         "app.main:app",
         host=os.getenv("HOST", "0.0.0.0"),
