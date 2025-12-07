@@ -4,6 +4,7 @@ const formEl = document.getElementById('chat-form');
 const sendBtn = document.getElementById('send-btn');
 const newChatBtn = document.getElementById('new-chat');
 const showToolsToggle = document.getElementById('show-tools');
+const modelLabelEl = document.getElementById('model-label');
 const chatListEl = document.getElementById('chat-list');
 const suggestionButtons = document.querySelectorAll('.suggestion-card');
 
@@ -56,7 +57,11 @@ function renderHistory(history = []) {
 }
 
 function startAssistantStream() {
+    // Create the assistant bubble but keep it detached until final text is ready.
     const { bubble, wrapper } = addMessage('assistant', '', { typing: true });
+    if (wrapper.parentElement === messagesEl) {
+        messagesEl.removeChild(wrapper);
+    }
     let text = '';
     return {
         append(chunk) {
@@ -71,6 +76,10 @@ function startAssistantStream() {
         },
         text() {
             return text;
+        },
+        attach() {
+            messagesEl.appendChild(wrapper);
+            scrollToBottom();
         },
     };
 }
@@ -94,6 +103,19 @@ async function refreshSessions() {
             });
             chatListEl.appendChild(item);
         });
+    } catch (err) {
+        console.error(err);
+    }
+}
+
+async function refreshModel() {
+    try {
+        const res = await fetch('/api/model');
+        if (!res.ok) return;
+        const payload = await res.json();
+        if (modelLabelEl && payload.model) {
+            modelLabelEl.textContent = `Model: ${payload.model}`;
+        }
     } catch (err) {
         console.error(err);
     }
@@ -152,18 +174,19 @@ async function sendMessage(text) {
             const data = dataLines.join('');
 
             if (event === 'error') throw new Error(data || 'Stream error');
-            if (event === 'tools') {
-                if (data && showTools) {
-                    try {
-                        renderToolCalls(JSON.parse(data));
-                    } catch (e) {
-                        console.error('Failed to parse tool calls', e);
-                    }
+            if (event === 'tools') return false;
+            if (['status', 'tool_start', 'tool_result'].includes(event)) {
+                try {
+                    const parsed = data ? JSON.parse(data) : {};
+                    renderStatusEvent(event, parsed, showTools);
+                } catch (e) {
+                    console.error('Failed to parse status event', e);
                 }
                 return false;
             }
             if (event === 'done') {
                 if (data) chatId = data;
+                if (stream.attach) stream.attach();
                 stream.done();
                 return true;
             }
@@ -255,6 +278,7 @@ suggestionButtons.forEach((btn) =>
 // seed welcome message
 addMessage('assistant', 'Hey! I am BlueGPT. I use OpenAI plus optional MCP tools via a local agentic loop. Ask me anything, or click a suggestion to start.');
 refreshSessions();
+refreshModel();
 
 function renderToolCalls(calls = []) {
     if (!Array.isArray(calls) || !calls.length) return;
@@ -264,4 +288,24 @@ function renderToolCalls(calls = []) {
         const content = `Tool: ${call.name || 'unknown'}\nArgs:\n${args}\nResult:\n${output}`;
         addMessage('tool', content);
     });
+}
+
+function renderStatusEvent(eventType, payload = {}, verbose = true) {
+    let text = '';
+    if (eventType === 'tool_start') {
+        text = verbose
+            ? `Calling tool: ${payload.name || 'unknown'}\nArgs: ${JSON.stringify(payload.arguments ?? {}, null, 2)}`
+            : `Calling tool: ${payload.name || 'unknown'}...`;
+    } else if (eventType === 'tool_result') {
+        if (!verbose) return;
+        if (verbose) {
+            const output = typeof payload.output === 'string' ? payload.output : JSON.stringify(payload.output, null, 2);
+            text = `Tool result: ${payload.name || 'unknown'}\nOutput: ${output}`;
+        } else {
+            text = `Tool result: ${payload.name || 'unknown'}`;
+        }
+    } else {
+        text = payload.message || JSON.stringify(payload);
+    }
+    addMessage('tool', text);
 }

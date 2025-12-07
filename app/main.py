@@ -13,6 +13,8 @@ from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel, Field
 from sse_starlette.sse import EventSourceResponse
 import uvicorn
+import asyncio
+import json
 
 from .agent import AgentManager, DEFAULT_MODEL, DEFAULT_SYSTEM_PROMPT
 
@@ -68,6 +70,11 @@ async def list_tools() -> List[dict]:
     return manager.registry.summary()
 
 
+@app.get("/api/model")
+async def get_model() -> dict:
+    return {"model": DEFAULT_MODEL}
+
+
 @app.get("/api/chat/{chat_id}")
 async def get_chat(chat_id: str) -> JSONResponse:
     history = manager.history(chat_id)
@@ -105,7 +112,23 @@ async def chat_stream(request: ChatRequest = Body(...)) -> EventSourceResponse:
     )
 
     async def event_generator() -> AsyncGenerator[dict, None]:
-        reply = await session.run(request.message)
+        queue: asyncio.Queue[dict] = asyncio.Queue()
+
+        async def on_event(payload: dict) -> None:
+            await queue.put(payload)
+
+        task = asyncio.create_task(session.stream_run(request.message, on_event=on_event))
+
+        while True:
+            if task.done() and queue.empty():
+                break
+            try:
+                payload = await asyncio.wait_for(queue.get(), timeout=0.05)
+                yield {"event": payload.get("type", "status"), "data": json.dumps(payload)}
+            except asyncio.TimeoutError:
+                pass
+
+        reply = await task
         yield {"event": "tools", "data": json.dumps(session.tool_trace)}
         for chunk in _chunk_text(reply):
             yield {"data": chunk}

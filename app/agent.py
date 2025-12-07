@@ -3,7 +3,7 @@ import logging
 import os
 import uuid
 from dataclasses import dataclass, field
-from typing import Any, Dict, List, Optional
+from typing import Any, Awaitable, Callable, Dict, List, Optional
 
 from dotenv import load_dotenv
 from fastapi import HTTPException
@@ -20,7 +20,7 @@ DEFAULT_SYSTEM_PROMPT = (
     "You are BlueGPT, a concise assistant. Use provided tools when they improve factual accuracy. "
     "Keep answers brief but helpful. If a tool call fails, explain the failure and continue."
 )
-DEFAULT_MODEL = os.getenv("OPENAI_MODEL", "gpt-5.1")
+DEFAULT_MODEL = os.getenv("OPENAI_MODEL", "gpt-5-mini")
 
 _client: Optional[AsyncOpenAI] = None
 
@@ -127,13 +127,23 @@ class AgentSession:
             self.messages.append({"role": "system", "content": self.system_prompt})
 
     async def run(self, user_message: str) -> str:
+        return await self.stream_run(user_message)
+
+    async def stream_run(
+        self,
+        user_message: str,
+        on_event: Optional[Callable[[Dict[str, Any]], Awaitable[None] | None]] = None,
+    ) -> str:
         self.messages.append({"role": "user", "content": user_message})
         self.tool_trace = []
-        reply = await self._generate()
+        reply = await self._generate(on_event=on_event)
         self.messages.append({"role": "assistant", "content": reply})
         return reply
 
-    async def _generate(self) -> str:
+    async def _generate(
+        self,
+        on_event: Optional[Callable[[Dict[str, Any]], Awaitable[None] | None]] = None,
+    ) -> str:
         tools = self.registry.list_for_responses() or None
         client = get_client()
 
@@ -157,7 +167,7 @@ class AgentSession:
                 for call in tool_calls:
                     call_id, name, args = _parse_tool_call(call)
                     try:
-                        schema = self.registry.get(name).as_response_tool().get("input_schema")
+                        schema = self.registry.get(name).as_response_tool().get("parameters")
                     except Exception:
                         schema = None
                     logger.debug("Tool call requested: %s args=%s expected_schema=%s", name, args, schema)
@@ -170,10 +180,14 @@ class AgentSession:
                             missing = [
                                 field for field in required_fields if field not in args or args[field] in (None, "")
                             ]
+                    if on_event:
+                        await on_event({"type": "tool_start", "name": name, "arguments": args})
                     if missing:
                         result = f"Missing required arguments for {name}: {', '.join(missing)}. Please retry with values."
                     else:
                         result = await self.registry.execute(name, args)
+                    if on_event:
+                        await on_event({"type": "tool_result", "name": name, "arguments": args, "output": result})
                     self.tool_trace.append({"name": name, "arguments": args, "output": result})
 
                     tool_outputs.append({"type": "function_call_output", "call_id": call_id, "output": str(result)})
