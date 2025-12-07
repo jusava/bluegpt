@@ -1,0 +1,24 @@
+[mcp]
+
+# Example HTTP tool
+# [[mcp.http]]
+# name = "docs_search"
+# description = "Search docs"
+# endpoint = "http://localhost:9000/tools/docs_search"
+# parameters.type = "object"
+
+# Example FastMCP stdio server (auto-discover tools)
+[[mcp.stdio_servers]]
+command = "fastmcp"
+args = ["run", "app/mcp_fast_time.py:mcp"]
+cwd = "."
+
+# Example FastMCP stdio tool (manual tool definition)
+# [[mcp.stdio_tools]]
+# name = "utc_time"
+# description = "UTC via FastMCP stdio"
+# command = "fastmcp"
+# args = ["run", "app/mcp_fast_time.py:mcp"]
+# parameters.type = "object"
+# parameters.properties = {}
+# parameters.additionalProperties = false
