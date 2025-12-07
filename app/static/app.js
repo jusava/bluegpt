@@ -12,6 +12,7 @@ const toolsTreeEl = document.getElementById('tools-tree');
 const modelSelectEl = document.getElementById('model-select');
 const chatListEl = document.getElementById('chat-list');
 const suggestionButtons = document.querySelectorAll('.suggestion-card');
+const suggestionsContainer = document.querySelector('.suggestions');
 
 let chatId = null;
 let streaming = false;
@@ -379,11 +380,39 @@ suggestionButtons.forEach((btn) =>
     })
 );
 
-// seed welcome message
+async function refreshSamples() {
+    try {
+        const res = await fetch('/api/samples');
+        if (!res.ok) return;
+        const samples = await res.json();
+        if (!Array.isArray(samples) || !suggestionsContainer) return;
+        suggestionsContainer.innerHTML = '';
+        samples.forEach((s) => {
+            const btn = document.createElement('button');
+            btn.className = 'suggestion-card';
+            btn.dataset.prompt = s.prompt || '';
+            btn.innerHTML = `
+                <div class="suggestion-title">${s.title || 'Sample'}</div>
+                <p>${s.description || ''}</p>
+            `;
+            btn.addEventListener('click', () => {
+                const prompt = btn.dataset.prompt || btn.textContent;
+                promptEl.value = prompt;
+                promptEl.focus();
+            });
+            suggestionsContainer.appendChild(btn);
+        });
+    } catch (err) {
+        console.error(err);
+    }
+}
+
+// seed welcome message & data
 addMessage('assistant', 'Hey! I am BlueGPT. I use OpenAI plus optional MCP tools via a local agentic loop. Ask me anything, or click a suggestion to start.');
 refreshSessions();
 refreshModel();
 refreshTools();
+refreshSamples();
 
 function renderToolCalls(calls = []) {
     if (!Array.isArray(calls) || !calls.length) return;

@@ -37,13 +37,13 @@ Order of loading (later entries do not override earlier unless the tool name mat
 
 ## FastMCP Quickstart (stdio)
 
-Sample server: `app/mcp_fast_time.py` (tools: `current_time`, `find_timezone`).
+Sample server: `mcps/time_helper.py` (tools: `current_time`, `find_timezone`).
 
 Config options (auto-discover only):
 ```toml
 [[mcp.stdio_servers]]
 command = "fastmcp"
-args = ["run", "app/mcp_fast_time.py:mcp"]
+args = ["run", "mcps/time_helper.py:mcp"]
 prefix = ""
 ```
 

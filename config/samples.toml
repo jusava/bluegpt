@@ -1,0 +1,9 @@
+[[samples]]
+title = "List tools"
+description = "Have the assistant enumerate active tools."
+prompt = "What tools do you have available?"
+
+[[samples]]
+title = "Time in Helsinki"
+description = "Use the time helper to check current time."
+prompt = "What time is it in Helsinki?"

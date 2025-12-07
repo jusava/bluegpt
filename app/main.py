@@ -15,6 +15,7 @@ from sse_starlette.sse import EventSourceResponse
 import uvicorn
 
 from .agent import AgentManager, AVAILABLE_MODELS, DEFAULT_SYSTEM_PROMPT
+from .config import load_samples_config
 
 load_dotenv()
 
@@ -38,6 +39,7 @@ app.mount("/static", StaticFiles(directory=static_dir), name="static")
 
 manager = AgentManager()
 logger.info("Tool registry loaded: %s", manager.registry.summary())
+SAMPLES = load_samples_config()
 
 
 class ChatRequest(BaseModel):
@@ -96,6 +98,11 @@ async def set_model(payload: ModelUpdate) -> JSONResponse:
         raise HTTPException(status_code=400, detail="Model not supported")
     manager.current_model = payload.model
     return JSONResponse({"model": manager.current_model, "available": AVAILABLE_MODELS})
+
+
+@app.get("/api/samples")
+async def get_samples() -> list[dict]:
+    return SAMPLES
 
 
 @app.get("/api/chat/{chat_id}")

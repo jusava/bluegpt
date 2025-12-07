@@ -8,6 +8,19 @@ DEFAULT_APP_CONFIG: Dict[str, Any] = {
     "available_models": ["gpt-5.1", "gpt-5-mini"],
 }
 
+DEFAULT_SAMPLES: list[Dict[str, str]] = [
+    {
+        "title": "List tools",
+        "description": "Have the assistant enumerate active tools.",
+        "prompt": "What tools do you have available?",
+    },
+    {
+        "title": "Time in Helsinki",
+        "description": "Use the time helper to check current time.",
+        "prompt": "What time is it in Helsinki?",
+    },
+]
+
 
 def _load_toml(path: Path) -> Dict[str, Any]:
     # Let errors propagate if the file is missing or malformed.
@@ -34,3 +47,22 @@ def load_prompts_config(path: str | None = None) -> Dict[str, str]:
         "Keep answers brief but helpful. If a tool call fails, explain the failure and continue.",
     )
     return {"system": system_prompt}
+
+
+def load_samples_config(path: str | None = None) -> list[Dict[str, str]]:
+    config_path = Path(path or os.getenv("SAMPLES_CONFIG_FILE", "config/samples.toml"))
+    if not config_path.exists():
+        return DEFAULT_SAMPLES
+    data = _load_toml(config_path)
+    helpers_cfg = data.get("samples", [])
+    if not isinstance(helpers_cfg, list):
+        return DEFAULT_SAMPLES
+    return [
+        {
+            "title": str(item.get("title", "")),
+            "description": str(item.get("description", "")),
+            "prompt": str(item.get("prompt", "")),
+        }
+        for item in helpers_cfg
+        if isinstance(item, dict) and item.get("prompt")
+    ] or DEFAULT_SAMPLES

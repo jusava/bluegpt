@@ -26,29 +26,12 @@ Local-first web UI that feels like ChatGPT/Gemini, backed by the OpenAI **Respon
 
 ### MCP integration
 
-You can register HTTP-exposed MCP tools via `MCP_HTTP_TOOLS` (JSON array). Each entry should include a name, description, parameters schema, and an endpoint the server can call:
-```bash
-export MCP_HTTP_TOOLS='[
-  {
-    "name": "docs_search",
-    "description": "Search internal documentation",
-    "endpoint": "http://localhost:9000/tools/docs_search",
-    "parameters": {
-      "type": "object",
-      "properties": { "query": { "type": "string" } },
-      "required": ["query"]
-    }
-  }
-]'
-```
-The tool definitions are surfaced to the OpenAI function-calling interface so the model can invoke them during the agentic loop.
-
-You can provide a TOML config file (default `mcp.toml`, override with `MCP_CONFIG_FILE`) to register FastMCP stdio servers (auto-discovery). Tools are negotiated from the server; no manual tool definitions. See the sample `mcp.toml` for structure (config only; env discovery removed):
+You can provide a TOML config file (default `config/mcp.toml`, override with `MCP_CONFIG_FILE`) to register FastMCP stdio servers (auto-discovery). Tools are negotiated from the server; no manual tool definitions. See the sample `config/mcp.toml` for structure (config only; env discovery removed):
 ```toml
 [mcp]
 [[mcp.stdio_servers]]
 command = "fastmcp"
-args = ["run", "app/mcp_fast_time.py:mcp"]
+args = ["run", "mcps/time_helper.py:mcp"]
 prefix = "fast_"
 cwd = "."
 ```
@@ -57,7 +40,7 @@ cwd = "."
 
 1. Start the FastMCP server (stdio transport by default):
    ```bash
-   fastmcp run app/mcp_fast_time.py:mcp
+   fastmcp run mcps/time_helper.py:mcp
    ```
 2. Configure the agent via `mcp.toml` (`[[mcp.stdio_servers]]` as above).
 3. Restart the main app and ask the chat to call `current_time` or `find_timezone`. The client launches the FastMCP server via stdio when needed.
