@@ -22,19 +22,14 @@ logger = logging.getLogger(__name__)
 APP_CONFIG = load_app_config()
 PROMPTS_CONFIG = load_prompts_config()
 
-DEFAULT_SYSTEM_PROMPT = PROMPTS_CONFIG.get("system")
-DEFAULT_MODEL = APP_CONFIG.get("default_model", "gpt-5-mini")
-AVAILABLE_MODELS = APP_CONFIG.get("available_models", ["gpt-5.1", "gpt-5-mini"])
-DEFAULT_REASONING = APP_CONFIG.get("reasoning_effort", "none")
-DEFAULT_VERBOSITY = APP_CONFIG.get("text_verbosity", "low")
-DEFAULT_MAX_OUTPUT_TOKENS = APP_CONFIG.get("max_output_tokens", 1000)
-REASONING_OPTIONS = APP_CONFIG.get(
-    "reasoning_effort_options",
-    {
-        "gpt-5.1": ["none", "low", "medium", "high"],
-        "gpt-5-mini": ["minimal", "low", "medium", "high"],
-    },
-)
+# Strict configuration - no defaults here
+DEFAULT_SYSTEM_PROMPT = PROMPTS_CONFIG["system"]
+DEFAULT_MODEL = APP_CONFIG["default_model"]
+AVAILABLE_MODELS = APP_CONFIG["available_models"]
+DEFAULT_REASONING = APP_CONFIG["reasoning_effort"]
+DEFAULT_VERBOSITY = APP_CONFIG["text_verbosity"]
+DEFAULT_MAX_OUTPUT_TOKENS = APP_CONFIG["max_output_tokens"]
+REASONING_OPTIONS = APP_CONFIG["reasoning_effort_options"]
 
 _client: Optional[AsyncOpenAI] = None
 
@@ -55,7 +50,13 @@ def get_client() -> AsyncOpenAI:
         api_key = os.getenv("OPENAI_API_KEY")
         if not api_key:
             raise HTTPException(status_code=500, detail="OPENAI_API_KEY is not set.")
-        _client = AsyncOpenAI(api_key=api_key, base_url=os.getenv("OPENAI_BASE_URL"))
+        
+        # Use configured base URL, or fall back to None to let library decide (if empty string)
+        base_url = APP_CONFIG["openai_base_url"]
+        if not base_url:
+            base_url = None
+            
+        _client = AsyncOpenAI(api_key=api_key, base_url=base_url)
     return _client
 
 
@@ -96,7 +97,6 @@ class AgentSession:
 
             client = get_client()
             logger.info("Values: model=%s effort=%s", self.model, self.reasoning_effort)
-            # yield {"type": "text", "content": f"[DEBUG] Model: {self.model}, Effort: {self.reasoning_effort}\n\n"}
             
             logger.debug("Creating response with model=%s tools=%d", self.model, len(tools or []))
             

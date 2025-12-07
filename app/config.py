@@ -3,31 +3,6 @@ import tomllib
 from pathlib import Path
 from typing import Any, Dict
 
-DEFAULT_APP_CONFIG: Dict[str, Any] = {
-    "default_model": "gpt-5-mini",
-    "available_models": ["gpt-5.1", "gpt-5-mini"],
-    "reasoning_effort": "minimal",
-    "text_verbosity": "low",
-    "max_output_tokens": 1000,
-    "reasoning_effort_options": {
-        "gpt-5.1": ["none", "low", "medium", "high"],
-        "gpt-5-mini": ["minimal", "low", "medium", "high"],
-    },
-}
-
-DEFAULT_SAMPLES: list[Dict[str, str]] = [
-    {
-        "title": "List tools",
-        "description": "Have the assistant enumerate active tools.",
-        "prompt": "What tools do you have available?",
-    },
-    {
-        "title": "Time in Helsinki",
-        "description": "Use the time helper to check current time.",
-        "prompt": "What time is it in Helsinki?",
-    },
-]
-
 
 def _load_toml(path: Path) -> Dict[str, Any]:
     # Let errors propagate if the file is missing or malformed.
@@ -35,47 +10,47 @@ def _load_toml(path: Path) -> Dict[str, Any]:
 
 
 def load_app_config(path: str | None = None) -> Dict[str, Any]:
-    config_path = Path(path or os.getenv("APP_CONFIG_FILE", "config/config.toml"))
+    # Hardcoded path, no env var fallback
+    config_path = Path(path or "config/config.toml")
     data = _load_toml(config_path)
-    app_cfg = data.get("app", {})
-    reasoning_cfg = data.get("reasoning", {})
-    reasoning_allowed = reasoning_cfg.get("allowed", DEFAULT_APP_CONFIG["reasoning_effort_options"])
+    
+    # Strict key access - will raise KeyError if missing
+    app_cfg = data["app"]
+    search_cfg = data.get("search", {})  # generic section might be optional or handled elsewhere? 
+    # Actually user said "rely on entries in the toml without fallbacks".
+    # But usually top-level sections existence... I'll assume strictly required.
+    
+    # Wait, `reasoning` section was in config.toml.
+    reasoning_cfg = data["reasoning"]
+    
     return {
-        "default_model": app_cfg.get("default_model", DEFAULT_APP_CONFIG["default_model"]),
-        "available_models": app_cfg.get("available_models", DEFAULT_APP_CONFIG["available_models"]),
-        "reasoning_effort": app_cfg.get("reasoning_effort", DEFAULT_APP_CONFIG["reasoning_effort"]),
-        "text_verbosity": app_cfg.get("text_verbosity", DEFAULT_APP_CONFIG["text_verbosity"]),
-        "max_output_tokens": app_cfg.get("max_output_tokens", DEFAULT_APP_CONFIG["max_output_tokens"]),
-        "reasoning_effort_options": reasoning_allowed,
+        "default_model": app_cfg["default_model"],
+        "available_models": app_cfg["available_models"],
+        "reasoning_effort": app_cfg["reasoning_effort"],
+        "text_verbosity": app_cfg["text_verbosity"],
+        "max_output_tokens": app_cfg["max_output_tokens"],
+        "openai_base_url": app_cfg["openai_base_url"],
+        "reasoning_effort_options": reasoning_cfg["allowed"],
     }
 
 
 def load_prompts_config(path: str | None = None) -> Dict[str, str]:
-    config_path = Path(path or os.getenv("PROMPTS_CONFIG_FILE", "config/prompts.toml"))
+    config_path = Path(path or "config/prompts.toml")
     data = _load_toml(config_path)
-    prompts_cfg = data.get("prompts", {})
-    system_prompt = prompts_cfg.get(
-        "system",
-        "You are BlueGPT, a concise assistant. Use provided tools when they improve factual accuracy. "
-        "Keep answers brief but helpful. If a tool call fails, explain the failure and continue.",
-    )
-    return {"system": system_prompt}
+    return {"system": data["prompts"]["system"]}
 
 
 def load_samples_config(path: str | None = None) -> list[Dict[str, str]]:
-    config_path = Path(path or os.getenv("SAMPLES_CONFIG_FILE", "config/samples.toml"))
-    if not config_path.exists():
-        return DEFAULT_SAMPLES
+    config_path = Path(path or "config/samples.toml")
     data = _load_toml(config_path)
-    helpers_cfg = data.get("samples", [])
-    if not isinstance(helpers_cfg, list):
-        return DEFAULT_SAMPLES
+    
+    samples = data["samples"]
+    # We expect a list of dicts with specific keys
     return [
         {
-            "title": str(item.get("title", "")),
-            "description": str(item.get("description", "")),
-            "prompt": str(item.get("prompt", "")),
+            "title": str(item["title"]),
+            "description": str(item["description"]),
+            "prompt": str(item["prompt"]),
         }
-        for item in helpers_cfg
-        if isinstance(item, dict) and item.get("prompt")
-    ] or DEFAULT_SAMPLES
+        for item in samples
+    ]
