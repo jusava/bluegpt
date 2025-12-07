@@ -9,6 +9,10 @@ DEFAULT_APP_CONFIG: Dict[str, Any] = {
     "reasoning_effort": "minimal",
     "text_verbosity": "low",
     "max_output_tokens": 1000,
+    "reasoning_effort_options": {
+        "gpt-5.1": ["none", "low", "medium", "high"],
+        "gpt-5-mini": ["minimal", "low", "medium", "high"],
+    },
 }
 
 DEFAULT_SAMPLES: list[Dict[str, str]] = [
@@ -34,12 +38,15 @@ def load_app_config(path: str | None = None) -> Dict[str, Any]:
     config_path = Path(path or os.getenv("APP_CONFIG_FILE", "config/config.toml"))
     data = _load_toml(config_path)
     app_cfg = data.get("app", {})
+    reasoning_cfg = data.get("reasoning", {})
+    reasoning_allowed = reasoning_cfg.get("allowed", DEFAULT_APP_CONFIG["reasoning_effort_options"])
     return {
         "default_model": app_cfg.get("default_model", DEFAULT_APP_CONFIG["default_model"]),
         "available_models": app_cfg.get("available_models", DEFAULT_APP_CONFIG["available_models"]),
         "reasoning_effort": app_cfg.get("reasoning_effort", DEFAULT_APP_CONFIG["reasoning_effort"]),
         "text_verbosity": app_cfg.get("text_verbosity", DEFAULT_APP_CONFIG["text_verbosity"]),
         "max_output_tokens": app_cfg.get("max_output_tokens", DEFAULT_APP_CONFIG["max_output_tokens"]),
+        "reasoning_effort_options": reasoning_allowed,
     }
 
 

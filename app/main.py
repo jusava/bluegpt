@@ -95,7 +95,12 @@ async def set_tool_active(name: str, payload: ToolActiveUpdate) -> JSONResponse:
 
 @app.get("/api/model")
 async def get_model() -> dict:
-    return {"model": manager.current_model, "available": AVAILABLE_MODELS}
+    return {
+        "model": manager.current_model,
+        "available": AVAILABLE_MODELS,
+        "reasoning_options": manager.reasoning_options,
+        "reasoning_effort": manager.reasoning_effort,
+    }
 
 
 @app.post("/api/model")
@@ -103,7 +108,18 @@ async def set_model(payload: ModelUpdate) -> JSONResponse:
     if payload.model not in AVAILABLE_MODELS:
         raise HTTPException(status_code=400, detail="Model not supported")
     manager.current_model = payload.model
-    return JSONResponse({"model": manager.current_model, "available": AVAILABLE_MODELS})
+    allowed_reasoning = manager.reasoning_options.get(manager.current_model) or []
+    if allowed_reasoning:
+        # Always reset to the first allowed option when the model changes.
+        manager.reasoning_effort = allowed_reasoning[0]
+    return JSONResponse(
+        {
+            "model": manager.current_model,
+            "available": AVAILABLE_MODELS,
+            "reasoning_effort": manager.reasoning_effort,
+            "reasoning_options": manager.reasoning_options,
+        }
+    )
 
 
 @app.get("/api/generation")
@@ -122,7 +138,8 @@ async def get_generation_settings() -> dict:
 
 @app.post("/api/generation")
 async def set_generation_settings(payload: GenerationUpdate) -> JSONResponse:
-    if payload.reasoning_effort not in {"minimal", "low", "medium", "high"}:
+    allowed_reasoning = manager.reasoning_options.get(manager.current_model) or ["none", "low", "medium", "high"]
+    if payload.reasoning_effort not in set(allowed_reasoning):
         raise HTTPException(status_code=400, detail="Invalid reasoning effort")
     if payload.text_verbosity not in {"low", "medium", "high"}:
         raise HTTPException(status_code=400, detail="Invalid text verbosity")

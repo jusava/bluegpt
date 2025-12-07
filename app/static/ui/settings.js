@@ -7,6 +7,7 @@ const verbositySelectEl = document.getElementById('text-verbosity');
 const maxTokensInput = document.getElementById('max-output-tokens');
 const toolsTreeEl = document.getElementById('tools-tree');
 const chatListEl = document.getElementById('chat-list');
+let reasoningOptionsMap = {};
 
 export async function refreshSessions(currentChatId, onSelectChat) {
     try {
@@ -42,6 +43,9 @@ export async function refreshModel() {
         const res = await fetch('/api/model');
         if (!res.ok) return;
         const payload = await res.json();
+        if (payload.reasoning_options) {
+            reasoningOptionsMap = payload.reasoning_options;
+        }
         if (modelLabelEl && payload.model) {
             modelLabelEl.textContent = `Model: ${payload.model}`;
         }
@@ -59,6 +63,8 @@ export async function refreshModel() {
                 modelSelectEl.value = currentValue;
             }
         }
+        const allowed = (payload.reasoning_options && payload.reasoning_options[payload.model]) || [];
+        applyReasoningOptions(allowed, payload.reasoning_effort);
     } catch (err) {
         console.error(err);
     }
@@ -69,6 +75,10 @@ export async function refreshGenerationSettings() {
         const res = await fetch('/api/generation');
         if (!res.ok) return;
         const payload = await res.json();
+        const model = modelSelectEl ? modelSelectEl.value : null;
+        const allowed = (model && reasoningOptionsMap[model]) || reasoningOptionsMap.default || [];
+        applyReasoningOptions(allowed, payload.reasoning_effort);
+        setSelectOptions(verbositySelectEl, ["low", "medium", "high"], payload.text_verbosity);
         if (reasoningSelectEl && payload.reasoning_effort) {
             reasoningSelectEl.value = payload.reasoning_effort;
         }
@@ -92,6 +102,30 @@ export async function refreshTools() {
     } catch (err) {
         console.error(err);
     }
+}
+
+function setSelectOptions(selectEl, options, current) {
+    if (!selectEl || !Array.isArray(options)) return;
+    const prev = selectEl.value;
+    selectEl.innerHTML = '';
+    options.forEach((opt) => {
+        const optionEl = document.createElement('option');
+        optionEl.value = opt;
+        optionEl.textContent = opt.charAt(0).toUpperCase() + opt.slice(1);
+        if (current === opt || (!current && prev === opt)) optionEl.selected = true;
+        selectEl.appendChild(optionEl);
+    });
+    console.debug('Set select options:', selectEl.id, options, current);
+    if (current && options.includes(current)) {
+        selectEl.value = current;
+    } else {
+        selectEl.value = options[0] || '';
+    }
+}
+
+function applyReasoningOptions(allowed, current) {
+    if (!Array.isArray(allowed) || !allowed.length) return;
+    setSelectOptions(reasoningSelectEl, allowed, current);
 }
 
 function renderToolsTree(tools = []) {
@@ -181,7 +215,16 @@ export function attachSettingsListeners() {
                     body: JSON.stringify({ model: val }),
                 });
                 if (!res.ok) throw new Error('Failed to set model');
-                await refreshModel();
+                const payload = await res.json();
+                if (payload.reasoning_options) {
+                    reasoningOptionsMap = payload.reasoning_options;
+                }
+                const allowed =
+                    (payload.reasoning_options && payload.reasoning_options[payload.model]) ||
+                    (reasoningOptionsMap && reasoningOptionsMap[payload.model]) ||
+                    [];
+                applyReasoningOptions(allowed, payload.reasoning_effort);
+                if (modelLabelEl) modelLabelEl.textContent = `Model: ${payload.model}`;
             } catch (err) {
                 console.error(err);
             }

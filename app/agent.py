@@ -28,6 +28,13 @@ AVAILABLE_MODELS = APP_CONFIG.get("available_models", ["gpt-5.1", "gpt-5-mini"])
 DEFAULT_REASONING = APP_CONFIG.get("reasoning_effort", "none")
 DEFAULT_VERBOSITY = APP_CONFIG.get("text_verbosity", "low")
 DEFAULT_MAX_OUTPUT_TOKENS = APP_CONFIG.get("max_output_tokens", 1000)
+REASONING_OPTIONS = APP_CONFIG.get(
+    "reasoning_effort_options",
+    {
+        "gpt-5.1": ["none", "low", "medium", "high"],
+        "gpt-5-mini": ["minimal", "low", "medium", "high"],
+    },
+)
 
 _client: Optional[AsyncOpenAI] = None
 
@@ -103,7 +110,7 @@ class AgentSession:
                 model=self.model,
                 input=input_list,
                 tools=tools_param,
-                reasoning=Reasoning(effort=self.reasoning_effort),
+                reasoning=Reasoning(effort=self.reasoning_effort, summary="auto"),
                 max_output_tokens=self.max_output_tokens,
             )
 
@@ -153,6 +160,7 @@ class AgentManager:
         self.reasoning_effort = DEFAULT_REASONING
         self.text_verbosity = DEFAULT_VERBOSITY
         self.max_output_tokens = DEFAULT_MAX_OUTPUT_TOKENS
+        self.reasoning_options: Dict[str, List[str]] = REASONING_OPTIONS
 
     def get_or_create(
         self,
