@@ -3,7 +3,7 @@ import logging
 import os
 import uuid
 from dataclasses import dataclass, field
-from typing import Any, Awaitable, Callable, Dict, List, Optional
+from typing import Any, Awaitable, Callable, Dict, List, Optional, cast
 
 from dotenv import load_dotenv
 from fastapi import HTTPException
@@ -144,25 +144,28 @@ class AgentSession:
         self,
         on_event: Optional[Callable[[Dict[str, Any]], Awaitable[None] | None]] = None,
     ) -> str:
-        tools = self.registry.list_for_responses() or None
+        tools: List[Dict[str, Any]] = self.registry.list_for_responses() or []
+        tools_param = tools or None
+        input_items: List[Dict[str, Any]] = list(self.messages)
+
         client = get_client()
 
-        input_list: List[Dict[str, Any]] = list(self.messages)
 
         # Execute tool loop until the model stops requesting tools.
         while True:
             logger.debug("Creating response with model=%s tools=%d", self.model, len(tools or []))
             response = await client.responses.create(
                 model=self.model,
-                input=input_list,
-                tools=tools,
+                input=input_items,
+                tools=tools_param,
             )
 
             required_action = getattr(response, "required_action", None)
             tool_calls = _extract_tool_calls(required_action) or _extract_tool_calls_from_output(getattr(response, "output", None))
 
             if tool_calls:
-                input_list.extend(getattr(response, "output", []) or [])
+                output_items = getattr(response, "output", []) or []
+                input_items.extend(output_items)
                 tool_outputs: List[Dict[str, Any]] = []
                 for call in tool_calls:
                     call_id, name, args = _parse_tool_call(call)
@@ -191,7 +194,7 @@ class AgentSession:
                     self.tool_trace.append({"name": name, "arguments": args, "output": result})
 
                     tool_outputs.append({"type": "function_call_output", "call_id": call_id, "output": str(result)})
-                    input_list.append(tool_outputs[-1])
+                    input_items.append(tool_outputs[-1])
 
                 # Loop again with updated input_list containing function_call_output entries.
                 continue
@@ -201,8 +204,8 @@ class AgentSession:
                 raw = response.model_dump()
                 logger.error("Model returned no text response. Raw response: %s", raw)
                 raise HTTPException(status_code=500, detail="Model returned no text response.")
-            input_list.append({"role": "assistant", "content": text})
-            self.messages = input_list
+            input_items.append({"role": "assistant", "content": text})
+            self.messages = cast(List[Dict[str, Any]], input_items)
             return text
 
 
