@@ -18,10 +18,6 @@ async def main() -> None:
     reply2 = await session.run("What time is it in Helsinki?")
     print("\nSecond reply:\n", reply2)
 
-    print("\nTool trace:")
-    for t in session.tool_trace:
-        print(t)
-
 
 if __name__ == "__main__":
     asyncio.run(main())

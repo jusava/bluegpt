@@ -164,7 +164,6 @@ async def chat(request: ChatRequest) -> JSONResponse:
             "chat_id": session.chat_id,
             "reply": reply,
             "tools": manager.registry.summary(),
-            "tool_calls": session.tool_trace,
         }
     )
 
@@ -212,7 +211,6 @@ async def chat_stream(request: ChatRequest = Body(...)) -> EventSourceResponse:
                 pass
 
         reply = await task
-        yield {"event": "tools", "data": json.dumps(session.tool_trace)}
         for chunk in _chunk_text(reply):
             yield {"data": chunk}
             await asyncio.sleep(0.015)

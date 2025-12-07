@@ -145,6 +145,8 @@ function addProcessingBubble() {
             const title = document.createElement('span');
             title.className = 'detail-title';
 
+            console.debug('Adding detail entry:', eventType, payload);
+
             if (eventType === 'tool_start') {
                 title.textContent = `Calling tool: ${payload.name || 'unknown'}`;
             } else if (eventType === 'tool_result') {
@@ -386,24 +388,25 @@ async function sendMessage(text) {
                 if (line.startsWith('data:')) {
                     let payload = line.slice(5);
                     if (payload.startsWith(' ')) payload = payload.slice(1);
+                    if (payload.endsWith('\r')) payload = payload.slice(0, -1);
                     // Strip the leading 'data:' marker but keep the rest verbatim (including newlines).
                     dataLines.push(payload);
                 }
             }
-            const data = dataLines.join('\n');
+            const eventName = event.toLowerCase();
+            const data = dataLines.join('\n').replace(/\r$/, '');
 
-            if (event === 'error') throw new Error(data || 'Stream error');
-            if (event === 'tools') return false;
-            if (['status', 'tool_start', 'tool_result', 'reasoning'].includes(event)) {
+            if (eventName === 'error') throw new Error(data || 'Stream error');
+            if (['status', 'tool_start', 'tool_result', 'reasoning'].includes(eventName)) {
                 try {
                     const parsed = data ? JSON.parse(data) : {};
-                    renderStatusEvent(event, parsed, showTools);
+                    renderStatusEvent(eventName, parsed, showTools);
                 } catch (e) {
                     console.error('Failed to parse status event', e);
                 }
                 return false;
             }
-            if (event === 'done') {
+            if (eventName === 'done') {
                 if (data) chatId = data;
                 progress.complete();
                 completed = true;
@@ -446,20 +449,6 @@ async function sendMessage(text) {
                 break;
             }
         }
-    } catch (err) {
-        console.warn('Falling back to non-stream mode', err);
-        const res = await fetch('/api/chat', {
-            method: 'POST',
-            headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({ message: text, chat_id: chatId || null }),
-        });
-        const payload = await res.json();
-        chatId = payload.chat_id;
-        if (showTools) renderToolCalls(payload.tool_calls || []);
-        stream.append(payload.reply || 'No response.');
-        stream.done();
-        progress.complete();
-        completed = true;
     } finally {
         if (!completed) {
             progress.complete();
@@ -538,42 +527,9 @@ refreshTools();
 refreshSamples();
 refreshGenerationSettings();
 
-function renderToolCalls(calls = []) {
-    if (!Array.isArray(calls) || !calls.length) return;
-    calls.forEach((call) => {
-        const args = JSON.stringify(call.arguments ?? {}, null, 2);
-        const output = typeof call.output === 'string' ? call.output : JSON.stringify(call.output, null, 2);
-        const content = `Tool: ${call.name || 'unknown'}\nArgs:\n${args}\nResult:\n${output}`;
-        addMessage('tool', content);
-    });
-}
-
 function renderStatusEvent(eventType, payload = {}, verbose = true) {
-    let text = '';
-    if (eventType === 'tool_start') {
-        text = `Calling tool: ${payload.name || 'unknown'}`;
-    } else if (eventType === 'tool_result') {
-        text = `Tool result: ${payload.name || 'unknown'}`;
-    } else if (eventType === 'reasoning') {
-        const reasoning = payload.reasoning || payload;
-        const summaryText = Array.isArray(reasoning.summary)
-            ? reasoning.summary.map((s) => s.text).filter(Boolean).join('\n')
-            : '';
-        const contentText = Array.isArray(reasoning.content)
-            ? reasoning.content.map((c) => c.text).filter(Boolean).join('\n')
-            : '';
-        text = summaryText || contentText || 'Reasoning...';
-    } else {
-        text = payload.message || JSON.stringify(payload);
-    }
     if (activeProgress && typeof activeProgress.addDetailEntry === 'function') {
         activeProgress.addDetailEntry(eventType, payload, verbose);
-    } else {
-        const summary = addMessage('tool', text);
-        if (eventType === 'tool_result' && verbose) {
-            const output = typeof payload.output === 'string' ? payload.output : JSON.stringify(payload.output, null, 2);
-            addMessage('tool', `Output:\n${output}`);
-        }
     }
 }
 

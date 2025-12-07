@@ -62,7 +62,6 @@ class AgentSession:
     text_verbosity: str = DEFAULT_VERBOSITY
     max_output_tokens: int = DEFAULT_MAX_OUTPUT_TOKENS
     messages: List[Any] = field(default_factory=list)
-    tool_trace: List[Dict[str, Any]] = field(default_factory=list)
 
     def __post_init__(self) -> None:
         if not self.messages:
@@ -77,7 +76,6 @@ class AgentSession:
         on_event: Optional[Callable[[Dict[str, Any]], Awaitable[None] | None]] = None,
     ) -> str:
         self.messages.append({"role": "user", "content": user_message})
-        self.tool_trace = []
         reply = await self._generate(on_event=on_event)
         return reply
 
@@ -138,13 +136,12 @@ class AgentSession:
                     await do_on_event({"type": "tool_result", "name": name, "arguments": args, "output": result})
                     input_list.append({"type": "function_call_output", "call_id": call_id, "output": str(result)})
                     called_tools = True
-                # else:
-                #     await do_on_event({"type": str(item.type), "output": str(item)})
 
             if called_tools:
                 # Loop again with updated input_list containing function_call_output entries.
                 continue
 
+            input_list.append({"role": "assistant", "content": response.output_text})
             return response.output_text
 
 
