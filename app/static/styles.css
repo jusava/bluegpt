@@ -267,7 +267,7 @@ a { color: inherit; }
     gap: 8px;
     padding: 8px 12px;
     background: rgba(45, 140, 255, 0.1);
-    border-radius: 999px;
+    border-radius: 14px;
     border: 1px solid var(--border);
     color: var(--muted);
     font-size: 13px;
@@ -424,8 +424,11 @@ a { color: inherit; }
     border-color: #cdd9f7;
     color: var(--muted);
     padding: 6px 10px;
-    border-radius: 10px;
+    /* border-radius: 10px; */
     line-height: 1.3;
+    display: inline-block;
+    max-width: 820px;
+    width: auto;
 }
 .message.status.processing .bubble {
     border-style: dashed;
@@ -434,6 +437,81 @@ a { color: inherit; }
     border-color: #f5b8b8;
     background: #fff2f2;
     color: #9c2f2f;
+}
+
+.progress-summary {
+    font-weight: 600;
+}
+
+.progress-toggle {
+    border: none;
+    background: transparent;
+    cursor: pointer;
+    font-size: 12px;
+    color: var(--muted);
+    padding: 2px 4px;
+}
+
+.progress-header {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    font-size: 13px;
+    font-weight: 600;
+    color: var(--muted);
+}
+
+.progress-detail-wrapper {
+    margin-top: 8px;
+    max-width: 760px;
+    width: 100%;
+}
+
+.progress-detail-wrapper.collapsed {
+    display: none;
+}
+
+.progress-details {
+    display: flex;
+    flex-direction: column;
+    gap: 8px;
+}
+
+.detail-bubble {
+    border-radius: 12px;
+    border: 1px solid #dfe7fb;
+    background: #f8faff;
+    color: var(--text);
+    max-width: 720px;
+    width: 100%;
+    display: block;
+}
+
+.detail-header {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    font-weight: 600;
+    color: var(--muted);
+    margin-bottom: 4px;
+}
+
+.detail-toggle {
+    border: none;
+    background: transparent;
+    cursor: pointer;
+    font-size: 12px;
+    color: var(--muted);
+    padding: 2px 4px;
+}
+
+.detail-title {
+    font-size: 14px;
+}
+
+.detail-body {
+    font-size: 13px;
+    line-height: 1.4;
 }
 
 .composer {

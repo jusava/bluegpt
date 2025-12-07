@@ -16,13 +16,14 @@ const suggestionsContainer = document.querySelector('.suggestions');
 
 let chatId = null;
 let streaming = false;
-let showTools = showToolsToggle ? showToolsToggle.checked : false;
+let showTools = true;
 let settingsOpen = false;
+let activeProgress = null;
 
 if (showToolsToggle) {
-    showToolsToggle.addEventListener('change', () => {
-        showTools = showToolsToggle.checked;
-    });
+    showToolsToggle.checked = true;
+    const toggleWrapper = showToolsToggle.closest('.toggle');
+    if (toggleWrapper) toggleWrapper.style.display = 'none';
 }
 
 if (settingsToggle && settingsPanel) {
@@ -79,16 +80,44 @@ function addMessage(role, content, options = {}) {
 
 function addProcessingBubble() {
     const start = performance.now();
-    const { wrapper, bubble } = addMessage('status', 'Processing…', { typing: false });
+    const { wrapper, bubble } = addMessage('status', '', { typing: false });
     wrapper.classList.add('processing');
 
-    const setText = (text) => {
-        bubble.innerHTML = renderText(text);
+    bubble.innerHTML = '';
+    const header = document.createElement('div');
+    header.className = 'progress-header';
+    const toggle = document.createElement('button');
+    toggle.type = 'button';
+    toggle.className = 'progress-toggle';
+    toggle.textContent = '▼';
+    const summary = document.createElement('span');
+    summary.className = 'progress-summary';
+    header.appendChild(toggle);
+    header.appendChild(summary);
+    bubble.appendChild(header);
+
+    const detailsContainer = document.createElement('div');
+    detailsContainer.className = 'progress-detail-wrapper collapsed';
+    const details = document.createElement('div');
+    details.className = 'progress-details';
+    detailsContainer.appendChild(details);
+    bubble.appendChild(detailsContainer);
+
+    let collapsed = true;
+    const setCollapsed = (next) => {
+        collapsed = next;
+        detailsContainer.classList.toggle('collapsed', collapsed);
+        toggle.textContent = collapsed ? '▼' : '▲';
+    };
+    toggle.addEventListener('click', () => setCollapsed(!collapsed));
+
+    const setSummary = (text) => {
+        summary.textContent = text;
     };
 
     const tick = () => {
         const elapsed = (performance.now() - start) / 1000;
-        setText(`Processing… (${elapsed.toFixed(1)}s)`);
+        setSummary(`Processing… (${elapsed.toFixed(1)}s)`);
     };
 
     tick();
@@ -100,13 +129,68 @@ function addProcessingBubble() {
     };
 
     return {
+        addDetailEntry(eventType, payload, verbose = true) {
+            const item = document.createElement('div');
+            item.className = 'bubble detail-bubble';
+
+            const headerRow = document.createElement('div');
+            headerRow.className = 'detail-header';
+            const dToggle = document.createElement('button');
+            dToggle.type = 'button';
+            dToggle.className = 'detail-toggle';
+            dToggle.textContent = '▼';
+            const title = document.createElement('span');
+            title.className = 'detail-title';
+
+            if (eventType === 'tool_start') {
+                title.textContent = `Calling tool: ${payload.name || 'unknown'}`;
+            } else if (eventType === 'tool_result') {
+                title.textContent = `Tool result: ${payload.name || 'unknown'}`;
+            } else {
+                title.textContent = payload.message || 'Status update';
+            }
+
+            headerRow.appendChild(dToggle);
+            headerRow.appendChild(title);
+
+            const body = document.createElement('div');
+            body.className = 'detail-body';
+
+            const lines = [];
+            if (eventType === 'tool_start' && verbose) {
+                lines.push(`Args:\n${JSON.stringify(payload.arguments ?? {}, null, 2)}`);
+            }
+            if (eventType === 'tool_result' && verbose) {
+                const output = typeof payload.output === 'string' ? payload.output : JSON.stringify(payload.output, null, 2);
+                lines.push(`Output:\n${output}`);
+            }
+            if (!lines.length && payload && verbose) {
+                lines.push(JSON.stringify(payload, null, 2));
+            }
+            body.innerHTML = renderText(lines.join('\n\n'));
+            body.style.display = 'none';
+
+            let dCollapsed = true;
+            const setDetailCollapsed = (next) => {
+                dCollapsed = next;
+                body.style.display = dCollapsed ? 'none' : 'block';
+                dToggle.textContent = dCollapsed ? '▼' : '▲';
+            };
+            dToggle.addEventListener('click', () => setDetailCollapsed(!dCollapsed));
+
+            item.appendChild(headerRow);
+            item.appendChild(body);
+            details.appendChild(item);
+            scrollToBottom();
+            return { setDetailCollapsed };
+        },
         complete(label = 'Completed') {
             if (finished) return;
             finished = true;
             stop();
             const elapsed = (performance.now() - start) / 1000;
             wrapper.classList.remove('processing');
-            setText(`${label} in ${elapsed.toFixed(1)}s`);
+            setSummary(`${label} in ${elapsed.toFixed(1)}s`);
         },
         fail(label = 'Request failed') {
             if (finished) return;
@@ -114,7 +198,7 @@ function addProcessingBubble() {
             stop();
             const elapsed = (performance.now() - start) / 1000;
             wrapper.classList.add('error');
-            setText(`${label} (${elapsed.toFixed(1)}s)`);
+            setSummary(`${label} (${elapsed.toFixed(1)}s)`);
         },
     };
 }
@@ -236,6 +320,7 @@ async function sendMessage(text) {
     sendBtn.disabled = true;
     sendBtn.textContent = 'Sending...';
     const progress = addProcessingBubble();
+    activeProgress = progress;
     const stream = startAssistantStream();
     let completed = false;
 
@@ -342,6 +427,7 @@ async function sendMessage(text) {
         if (!completed) {
             progress.complete();
         }
+        activeProgress = null;
         streaming = false;
         sendBtn.disabled = false;
         sendBtn.textContent = 'Send';
@@ -427,21 +513,21 @@ function renderToolCalls(calls = []) {
 function renderStatusEvent(eventType, payload = {}, verbose = true) {
     let text = '';
     if (eventType === 'tool_start') {
-        text = verbose
-            ? `Calling tool: ${payload.name || 'unknown'}\nArgs: ${JSON.stringify(payload.arguments ?? {}, null, 2)}`
-            : `Calling tool: ${payload.name || 'unknown'}...`;
+        text = `Calling tool: ${payload.name || 'unknown'}`;
     } else if (eventType === 'tool_result') {
-        if (!verbose) return;
-        if (verbose) {
-            const output = typeof payload.output === 'string' ? payload.output : JSON.stringify(payload.output, null, 2);
-            text = `Tool result: ${payload.name || 'unknown'}\nOutput: ${output}`;
-        } else {
-            text = `Tool result: ${payload.name || 'unknown'}`;
-        }
+        text = `Tool result: ${payload.name || 'unknown'}`;
     } else {
         text = payload.message || JSON.stringify(payload);
     }
-    addMessage('tool', text);
+    if (activeProgress && typeof activeProgress.addDetailEntry === 'function') {
+        activeProgress.addDetailEntry(eventType, payload, verbose);
+    } else {
+        const summary = addMessage('tool', text);
+        if (eventType === 'tool_result' && verbose) {
+            const output = typeof payload.output === 'string' ? payload.output : JSON.stringify(payload.output, null, 2);
+            addMessage('tool', `Output:\n${output}`);
+        }
+    }
 }
 
 function fallbackMarkdown(raw) {
