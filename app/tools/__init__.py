@@ -4,7 +4,7 @@ Public surface is re-exported here so callers can keep using
 `from app.tools import ToolRegistry, build_default_registry`, etc.
 """
 
-from .config import _load_mcp_config, _normalize_mcp_config
+from .config import _load_mcp_config
 from .discovery import (
     _discover_fastmcp_http_servers_from_config,
     _discover_fastmcp_stdio_servers_from_config,
@@ -15,7 +15,7 @@ from .registry import AgentTool, FastMCPHttpTool, FastMCPStdioTool, ToolRegistry
 
 def build_default_registry() -> ToolRegistry:
     registry = ToolRegistry()
-    config = _normalize_mcp_config(_load_mcp_config())
+    config = _load_mcp_config()
 
     for stdio_server_tool in _discover_fastmcp_stdio_servers_from_config(config):
         registry.register(stdio_server_tool)
@@ -36,4 +36,3 @@ __all__ = [
     "ToolRegistry",
     "build_default_registry",
 ]
-

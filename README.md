@@ -4,7 +4,7 @@ Local-first chat UI powered by the OpenAI **Responses API**, a FastAPI backend, 
 
 ### Features
 - Agent loop with Responses API tool calling and reasoning traces streamed to the UI.
-- FastMCP stdio/HTTP tool discovery from `config/mcp.toml` or a standard MCP JSON config; toggle tools on/off from the Settings panel or `/api/tools`.
+- FastMCP stdio/HTTP tool discovery from `config/mcp.toml`; toggle tools on/off from the Settings panel or `/api/tools`.
 - Config-driven defaults for model, reasoning effort, prompts, and sample suggestions.
 - Lightweight static frontend that streams text chunks and shows tool/reasoning events.
 - In-memory chat sessions with quick session switching (cleared on restart).
@@ -40,17 +40,13 @@ Local-first chat UI powered by the OpenAI **Responses API**, a FastAPI backend, 
   cwd = "."
   # env = { EXAMPLE = "1" }
   ```
-  You can also use the standard MCP JSON format by pointing `MCP_CONFIG_FILE` at a file like `config/mcp.json`:
-  ```json
-  { "mcpServers": { "time-http": { "url": "http://127.0.0.1:9001/mcp" } } }
-  ```
   Each server is discovered at backend boot and its tools are registered without renaming, so tool names match the server definitions.
 
 ### MCP quickstart
 - The repo includes `mcps/time_helper.py` (FastMCP) exposing `current_time` and `find_timezone`.
 - With the sample `config/mcp.toml`, the FastAPI app will launch the stdio FastMCP process automatically on startup.
 - If you want to run it manually over stdio: `fastmcp run mcps/time_helper.py:mcp`.
-- For an HTTP example, start `mcps/time_helper_http.py` (serves on `http://127.0.0.1:9001/mcp`) and add an `http_servers` or JSON `url` entry.
+- For an HTTP example, start `mcps/time_helper_http.py` (serves on `http://127.0.0.1:9001/mcp`) and add an `http_servers` entry.
 
 ### API
 - `GET /health` → health probe.

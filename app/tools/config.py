@@ -1,47 +1,11 @@
-import json
 import os
 import tomllib
 from pathlib import Path
-from typing import Any, Dict, List
+from typing import Any, Dict
 
 
 def _load_mcp_config() -> Dict[str, Any]:
-    """Load MCP config from TOML or standard MCP JSON file (via MCP_CONFIG_FILE)."""
+    """Load MCP config from TOML file specified by MCP_CONFIG_FILE."""
     path = Path(os.getenv("MCP_CONFIG_FILE", "config/mcp.toml"))
-    text = path.read_text()
-    if path.suffix.lower() == ".json":
-        return json.loads(text)
-    return tomllib.loads(text)
-
-
-def _normalize_mcp_config(raw: Dict[str, Any]) -> Dict[str, Any]:
-    """Normalize TOML-style or standard MCP JSON config into {stdio_servers, http_servers}."""
-    config: Dict[str, Any] = raw.get("mcp", raw)
-
-    stdio_servers: List[Dict[str, Any]] = list(config.get("stdio_servers", []))
-    http_servers: List[Dict[str, Any]] = list(config.get("http_servers", []))
-
-    mcp_servers: Dict[str, Any] = config.get("mcpServers") or config.get("mcp_servers") or {}
-    for name, server in mcp_servers.items():
-        if server.get("url"):
-            http_servers.append(
-                {
-                    "name": name,
-                    "url": server["url"],
-                    "headers": server.get("headers"),
-                    "auth": server.get("auth") or server.get("authorization_token"),
-                    "sse_read_timeout": server.get("sse_read_timeout"),
-                }
-            )
-        else:
-            stdio_servers.append(
-                {
-                    "name": name,
-                    "command": server["command"],
-                    "args": server.get("args", []),
-                    "env": server.get("env"),
-                    "cwd": server.get("cwd"),
-                }
-            )
-
-    return {"stdio_servers": stdio_servers, "http_servers": http_servers}
+    data: Dict[str, Any] = tomllib.loads(path.read_text())
+    return data["mcp"]
