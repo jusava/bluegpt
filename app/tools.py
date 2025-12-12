@@ -8,7 +8,6 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any, Awaitable, Callable, Dict, List, Optional
 
-import anyio
 from fastmcp import Client
 from fastmcp.client.transports import StdioTransport, StreamableHttpTransport
 from mcp.types import Implementation
@@ -42,6 +41,33 @@ class AgentTool:
         }
 
 
+class _LoopRunner:
+    """Run async FastMCP client operations on a dedicated, long-lived event loop."""
+
+    def __init__(self) -> None:
+        self._loop = asyncio.new_event_loop()
+        self._ready = threading.Event()
+        self._thread = threading.Thread(target=self._run_loop, daemon=True)
+        self._thread.start()
+        self._ready.wait()
+
+    def _run_loop(self) -> None:
+        asyncio.set_event_loop(self._loop)
+        self._ready.set()
+        self._loop.run_forever()
+
+    def run(self, coro: Awaitable[Any]) -> Any:
+        future = asyncio.run_coroutine_threadsafe(coro, self._loop)
+        return future.result()
+
+    def close(self) -> None:
+        try:
+            self._loop.call_soon_threadsafe(self._loop.stop)
+        finally:
+            self._thread.join(timeout=2)
+            self._loop.close()
+
+
 class MCPProcessClient:
     """Persistent stdio client for a FastMCP server using the official FastMCP Client."""
 
@@ -57,6 +83,7 @@ class MCPProcessClient:
         self.env = env
         self.cwd = cwd
         self._lock = threading.Lock()
+        self._runner = _LoopRunner()
 
         # StdioTransport handles subprocess lifecycle and protocol details.
         self.transport = StdioTransport(
@@ -73,8 +100,8 @@ class MCPProcessClient:
         )
 
     def _run(self, async_fn: Callable[..., Awaitable[Any]], *args: Any, **kwargs: Any) -> Any:
-        """Run an async FastMCP client call in a fresh event loop."""
-        return anyio.run(async_fn, *args, **kwargs)
+        """Run an async FastMCP client call on the dedicated loop."""
+        return self._runner.run(async_fn(*args, **kwargs))
 
     def list_tools(self) -> List[Any]:
         async def _list() -> List[Any]:
@@ -107,7 +134,9 @@ class MCPProcessClient:
     @property
     def is_running(self) -> bool:
         task = getattr(self.transport, "_connect_task", None)
-        return task is not None and not task.done()
+        if task is None:
+            return True
+        return not task.done()
 
     def close(self) -> None:
         async def _close() -> None:
@@ -118,6 +147,8 @@ class MCPProcessClient:
                 self._run(_close)
             except Exception:
                 logger.debug("Error closing FastMCP client", exc_info=True)
+            finally:
+                self._runner.close()
 
 
 class MCPHttpClient:
@@ -135,6 +166,7 @@ class MCPHttpClient:
         self.auth = auth
         self.sse_read_timeout = sse_read_timeout
         self._lock = threading.Lock()
+        self._runner = _LoopRunner()
 
         self.transport = StreamableHttpTransport(
             url=self.url,
@@ -149,7 +181,7 @@ class MCPHttpClient:
         )
 
     def _run(self, async_fn: Callable[..., Awaitable[Any]], *args: Any, **kwargs: Any) -> Any:
-        return anyio.run(async_fn, *args, **kwargs)
+        return self._runner.run(async_fn(*args, **kwargs))
 
     def list_tools(self) -> List[Any]:
         async def _list() -> List[Any]:
@@ -191,6 +223,8 @@ class MCPHttpClient:
                 self._run(_close)
             except Exception:
                 logger.debug("Error closing FastMCP HTTP client", exc_info=True)
+            finally:
+                self._runner.close()
 
 
 _CLIENT_CACHE: Dict[tuple, MCPProcessClient] = {}
