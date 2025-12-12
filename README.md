@@ -1,10 +1,10 @@
 ## BlueGPT
 
-Local-first chat UI powered by the OpenAI **Responses API**, a FastAPI backend, and an agentic loop that can call FastMCP stdio tools.
+Local-first chat UI powered by the OpenAI **Responses API**, a FastAPI backend, and an agentic loop that can call FastMCP tools over stdio or HTTP.
 
 ### Features
 - Agent loop with Responses API tool calling and reasoning traces streamed to the UI.
-- FastMCP stdio tool discovery from `config/mcp.toml`; toggle tools on/off from the Settings panel or `/api/tools`.
+- FastMCP stdio/HTTP tool discovery from `config/mcp.toml` or a standard MCP JSON config; toggle tools on/off from the Settings panel or `/api/tools`.
 - Config-driven defaults for model, reasoning effort, prompts, and sample suggestions.
 - Lightweight static frontend that streams text chunks and shows tool/reasoning events.
 - In-memory chat sessions with quick session switching (cleared on restart).
@@ -31,7 +31,7 @@ Local-first chat UI powered by the OpenAI **Responses API**, a FastAPI backend, 
 - `config/config.toml` (override with `APP_CONFIG_FILE`): default model, allowed models, reasoning effort defaults, text verbosity, and max output tokens.
 - `config/prompts.toml` (override with `PROMPTS_CONFIG_FILE`): system prompt injected into new chats.
 - `config/samples.toml` (override with `SAMPLES_CONFIG_FILE`): quick-start suggestion cards shown in the UI.
-- `config/mcp.toml` (override with `MCP_CONFIG_FILE`): FastMCP stdio servers to auto-discover tools from. Example:
+- `config/mcp.toml` (override with `MCP_CONFIG_FILE`): FastMCP servers to auto-discover tools from. Supports `[[mcp.stdio_servers]]` and `[[mcp.http_servers]]`. Example:
   ```toml
   [mcp]
   [[mcp.stdio_servers]]
@@ -40,12 +40,17 @@ Local-first chat UI powered by the OpenAI **Responses API**, a FastAPI backend, 
   cwd = "."
   # env = { EXAMPLE = "1" }
   ```
-  Each server is started at backend boot and its tools are registered without renaming, so tool names match the server definitions.
+  You can also use the standard MCP JSON format by pointing `MCP_CONFIG_FILE` at a file like `config/mcp.json`:
+  ```json
+  { "mcpServers": { "time-http": { "url": "http://127.0.0.1:9001/mcp" } } }
+  ```
+  Each server is discovered at backend boot and its tools are registered without renaming, so tool names match the server definitions.
 
 ### MCP quickstart
 - The repo includes `mcps/time_helper.py` (FastMCP) exposing `current_time` and `find_timezone`.
-- With the sample `config/mcp.toml`, the FastAPI app will launch the FastMCP process automatically on startup.
-- If you want to run it manually: `fastmcp run mcps/time_helper.py:mcp` then chat with "current_time" or "find_timezone".
+- With the sample `config/mcp.toml`, the FastAPI app will launch the stdio FastMCP process automatically on startup.
+- If you want to run it manually over stdio: `fastmcp run mcps/time_helper.py:mcp`.
+- For an HTTP example, start `mcps/time_helper_http.py` (serves on `http://127.0.0.1:9001/mcp`) and add an `http_servers` or JSON `url` entry.
 
 ### API
 - `GET /health` → health probe.

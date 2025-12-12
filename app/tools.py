@@ -2,12 +2,16 @@ import asyncio
 import json
 import logging
 import os
-import subprocess
 import threading
 import tomllib
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any, Awaitable, Callable, Dict, List, Optional
+
+import anyio
+from fastmcp import Client
+from fastmcp.client.transports import StdioTransport, StreamableHttpTransport
+from mcp.types import Implementation
 
 logger = logging.getLogger(__name__)
 
@@ -39,7 +43,7 @@ class AgentTool:
 
 
 class MCPProcessClient:
-    """Persistent stdio client for a FastMCP server using subprocess.Popen."""
+    """Persistent stdio client for a FastMCP server using the official FastMCP Client."""
 
     def __init__(
         self,
@@ -52,104 +56,145 @@ class MCPProcessClient:
         self.args = args or []
         self.env = env
         self.cwd = cwd
-        self.msg_id = 0
         self._lock = threading.Lock()
-        self.process = subprocess.Popen(
-            [self.command, *self.args],
-            stdin=subprocess.PIPE,
-            stdout=subprocess.PIPE,
-            stderr=subprocess.PIPE,
-            text=True,
-            bufsize=1,
-            env={**os.environ, **env} if env else None,
+
+        # StdioTransport handles subprocess lifecycle and protocol details.
+        self.transport = StdioTransport(
+            command=self.command,
+            args=self.args,
+            env=env,
             cwd=cwd,
+            keep_alive=True,
         )
-        self._handshake()
-
-    def _send(self, method: str, params: Optional[Dict[str, Any]] = None, *, is_notification: bool = False) -> Optional[int]:
-        message: Dict[str, Any] = {"jsonrpc": "2.0", "method": method}
-        if params is not None:
-            message["params"] = params
-        if not is_notification:
-            self.msg_id += 1
-            message["id"] = self.msg_id
-        json_line = json.dumps(message) + "\n"
-        if not self.process.stdin:
-            raise RuntimeError("FastMCP process stdin is unavailable")
-        self.process.stdin.write(json_line)
-        self.process.stdin.flush()
-        return message.get("id")
-
-    def _receive(self) -> Dict[str, Any]:
-        if not self.process.stdout:
-            raise RuntimeError("FastMCP process stdout is unavailable")
-        line = self.process.stdout.readline()
-        if not line:
-            raise RuntimeError("FastMCP server closed the connection unexpectedly")
-        return json.loads(line)
-
-    def _handshake(self) -> None:
-        self._send(
-            "initialize",
-            {
-                "protocolVersion": "2024-11-05",
-                "capabilities": {},
-                "clientInfo": {"name": "bluegpt", "version": "1.0"},
-            },
+        self.client = Client(
+            self.transport,
+            name="bluegpt-stdio",
+            client_info=Implementation(name="bluegpt", version="1.0"),
         )
-        init_response = self._receive()
-        if "error" in init_response:
-            raise RuntimeError(f"FastMCP initialize failed: {init_response['error']}")
-        self._send("notifications/initialized", is_notification=True)
 
-    def _await_response(self, target_id: int) -> Dict[str, Any]:
-        while True:
-            response = self._receive()
-            if response.get("id") == target_id:
-                return response
+    def _run(self, async_fn: Callable[..., Awaitable[Any]], *args: Any, **kwargs: Any) -> Any:
+        """Run an async FastMCP client call in a fresh event loop."""
+        return anyio.run(async_fn, *args, **kwargs)
 
-    def list_tools(self) -> List[Dict[str, Any]]:
+    def list_tools(self) -> List[Any]:
+        async def _list() -> List[Any]:
+            async with self.client:
+                return await self.client.list_tools()
+
         with self._lock:
-            req_id = self._send("tools/list")
-            if req_id is None:
-                raise RuntimeError("Failed to send tools/list request")
-            response = self._await_response(req_id)
-            if "error" in response:
-                raise RuntimeError(f"tools/list failed: {response['error']}")
-            result = response.get("result") or {}
-            return result.get("tools") or result
+            return self._run(_list)
 
     def call_tool(self, tool_name: str, arguments: Dict[str, Any]) -> str:
+        async def _call() -> Any:
+            async with self.client:
+                return await self.client.call_tool(tool_name, arguments or {})
+
         with self._lock:
-            req_id = self._send("tools/call", {"name": tool_name, "arguments": arguments})
-            if req_id is None:
-                raise RuntimeError("Failed to send tools/call request")
-            response = self._await_response(req_id)
-            if "error" in response:
-                raise RuntimeError(response["error"].get("message") or "tools/call failed")
-            result = response.get("result") or {}
-            content = result.get("content")
-            if isinstance(content, list) and content:
-                text = content[0].get("text") or content[0].get("value")
-                if text is not None:
-                    return str(text)
-            return json.dumps(result)
+            result = self._run(_call)
+
+        # FastMCP returns a CallToolResult with typed content items.
+        content = getattr(result, "content", None)
+        if isinstance(content, list) and content:
+            first = content[0]
+            text = getattr(first, "text", None) or getattr(first, "value", None)
+            if text is not None:
+                return str(text)
+
+        if hasattr(result, "model_dump"):
+            return json.dumps(result.model_dump(exclude_none=True, by_alias=True))
+        return json.dumps(result)
 
     @property
     def is_running(self) -> bool:
-        return self.process.poll() is None
+        task = getattr(self.transport, "_connect_task", None)
+        return task is not None and not task.done()
 
     def close(self) -> None:
-        if self.process.stdin:
-            self.process.stdin.close()
-        if self.process.stdout:
-            self.process.stdout.close()
-        if self.process.stderr:
-            self.process.stderr.close()
-        self.process.terminate()
+        async def _close() -> None:
+            await self.client.close()
+
+        with self._lock:
+            try:
+                self._run(_close)
+            except Exception:
+                logger.debug("Error closing FastMCP client", exc_info=True)
+
+
+class MCPHttpClient:
+    """Persistent HTTP client for a FastMCP server using the official FastMCP Client."""
+
+    def __init__(
+        self,
+        url: str,
+        headers: Optional[Dict[str, str]] = None,
+        auth: Any = None,
+        sse_read_timeout: Any = None,
+    ) -> None:
+        self.url = url
+        self.headers = headers
+        self.auth = auth
+        self.sse_read_timeout = sse_read_timeout
+        self._lock = threading.Lock()
+
+        self.transport = StreamableHttpTransport(
+            url=self.url,
+            headers=headers,
+            auth=auth,
+            sse_read_timeout=sse_read_timeout,
+        )
+        self.client = Client(
+            self.transport,
+            name="bluegpt-http",
+            client_info=Implementation(name="bluegpt", version="1.0"),
+        )
+
+    def _run(self, async_fn: Callable[..., Awaitable[Any]], *args: Any, **kwargs: Any) -> Any:
+        return anyio.run(async_fn, *args, **kwargs)
+
+    def list_tools(self) -> List[Any]:
+        async def _list() -> List[Any]:
+            async with self.client:
+                return await self.client.list_tools()
+
+        with self._lock:
+            return self._run(_list)
+
+    def call_tool(self, tool_name: str, arguments: Dict[str, Any]) -> str:
+        async def _call() -> Any:
+            async with self.client:
+                return await self.client.call_tool(tool_name, arguments or {})
+
+        with self._lock:
+            result = self._run(_call)
+
+        content = getattr(result, "content", None)
+        if isinstance(content, list) and content:
+            first = content[0]
+            text = getattr(first, "text", None) or getattr(first, "value", None)
+            if text is not None:
+                return str(text)
+
+        if hasattr(result, "model_dump"):
+            return json.dumps(result.model_dump(exclude_none=True, by_alias=True))
+        return json.dumps(result)
+
+    @property
+    def is_running(self) -> bool:
+        return True
+
+    def close(self) -> None:
+        async def _close() -> None:
+            await self.client.close()
+
+        with self._lock:
+            try:
+                self._run(_close)
+            except Exception:
+                logger.debug("Error closing FastMCP HTTP client", exc_info=True)
 
 
 _CLIENT_CACHE: Dict[tuple, MCPProcessClient] = {}
+_HTTP_CLIENT_CACHE: Dict[tuple, MCPHttpClient] = {}
 _CLIENT_CACHE_LOCK = threading.Lock()
 
 
@@ -166,6 +211,32 @@ def _get_process_client(command: str, args: Optional[List[str]], env: Optional[D
             return client
         client = MCPProcessClient(command, args, env, cwd)
         _CLIENT_CACHE[key] = client
+        return client
+
+
+def _http_client_cache_key(
+    url: str,
+    headers: Optional[Dict[str, str]],
+    auth: Any,
+    sse_read_timeout: Any,
+) -> tuple:
+    headers_items = tuple(sorted((headers or {}).items()))
+    return (url, headers_items, str(auth) if auth is not None else None, sse_read_timeout)
+
+
+def _get_http_client(
+    url: str,
+    headers: Optional[Dict[str, str]],
+    auth: Any,
+    sse_read_timeout: Any,
+) -> MCPHttpClient:
+    key = _http_client_cache_key(url, headers, auth, sse_read_timeout)
+    with _CLIENT_CACHE_LOCK:
+        client = _HTTP_CLIENT_CACHE.get(key)
+        if client and client.is_running:
+            return client
+        client = MCPHttpClient(url, headers=headers, auth=auth, sse_read_timeout=sse_read_timeout)
+        _HTTP_CLIENT_CACHE[key] = client
         return client
 
 
@@ -194,6 +265,35 @@ class FastMCPStdioTool(AgentTool):
         return _get_process_client(self.command, self.args, self.env, self.cwd)
 
     async def _call_stdio(self, arguments: Dict[str, Any]) -> str:
+        client = self._client()
+        return await asyncio.to_thread(client.call_tool, self.name, arguments or {})
+
+
+class FastMCPHttpTool(AgentTool):
+    """Adapter for calling a FastMCP server over Streamable HTTP."""
+
+    def __init__(
+        self,
+        name: str,
+        description: str,
+        parameters: Dict[str, Any],
+        url: str,
+        headers: Optional[Dict[str, str]] = None,
+        auth: Any = None,
+        sse_read_timeout: Any = None,
+    ) -> None:
+        self.url = url
+        self.headers = headers
+        self.auth = auth
+        self.sse_read_timeout = sse_read_timeout
+
+        super().__init__(name=name, description=description, parameters=parameters, handler=self._call_http)
+        self.source = "mcp-http"
+
+    def _client(self) -> MCPHttpClient:
+        return _get_http_client(self.url, self.headers, self.auth, self.sse_read_timeout)
+
+    async def _call_http(self, arguments: Dict[str, Any]) -> str:
         client = self._client()
         return await asyncio.to_thread(client.call_tool, self.name, arguments or {})
 
@@ -238,21 +338,26 @@ class ToolRegistry:
         self._active[name] = bool(active)
 
 
+def _camel(s: str) -> str:
+    parts = s.split("_")
+    return parts[0] + "".join(p.capitalize() for p in parts[1:])
+
+
+def _tfield(tool_def: Any, attr: str) -> Any:
+    if hasattr(tool_def, attr):
+        return getattr(tool_def, attr)
+    camel_attr = _camel(attr)
+    if hasattr(tool_def, camel_attr):
+        return getattr(tool_def, camel_attr)
+    if isinstance(tool_def, dict):
+        return tool_def.get(attr) or tool_def.get(camel_attr)
+    return None
+
+
 def _discover_fastmcp_stdio_servers_from_config(config: Dict[str, Any]) -> List[AgentTool]:
     servers = config.get("stdio_servers", [])
     if not servers:
         return []
-
-    def _camel(s: str) -> str:
-        parts = s.split("_")
-        return parts[0] + "".join(p.capitalize() for p in parts[1:])
-
-    def _tfield(tool_def: Any, attr: str) -> Any:
-        if hasattr(tool_def, attr):
-            return getattr(tool_def, attr)
-        if isinstance(tool_def, dict):
-            return tool_def.get(attr) or tool_def.get(_camel(attr))
-        return None
 
     discovered: List[AgentTool] = []
 
@@ -284,22 +389,102 @@ def _discover_fastmcp_stdio_servers_from_config(config: Dict[str, Any]) -> List[
     return discovered
 
 
+def _discover_fastmcp_http_servers_from_config(config: Dict[str, Any]) -> List[AgentTool]:
+    servers = config.get("http_servers", [])
+    if not servers:
+        return []
+
+    discovered: List[AgentTool] = []
+
+    def handle_one(item: Dict[str, Any]) -> None:
+        url = item.get("url")
+        if not url:
+            raise ValueError(f"MCP http server missing url: {item}")
+        client = _get_http_client(url, item.get("headers"), item.get("auth"), item.get("sse_read_timeout"))
+        prefix = ""
+        tools = client.list_tools()
+        for tool_def in tools:
+            base_name = _tfield(tool_def, "name")
+            if not base_name:
+                raise ValueError(f"MCP http tool missing name: {tool_def}")
+            name = f"{prefix}{base_name}"
+            description = _tfield(tool_def, "description") or ""
+            params = _tfield(tool_def, "input_schema") or _tfield(tool_def, "parameters") or {"type": "object", "additionalProperties": True}
+            discovered.append(
+                FastMCPHttpTool(
+                    name=name,
+                    description=description or "FastMCP http tool",
+                    parameters=params,
+                    url=url,
+                    headers=item.get("headers"),
+                    auth=item.get("auth"),
+                    sse_read_timeout=item.get("sse_read_timeout"),
+                )
+            )
+
+    for item in servers:
+        handle_one(item)
+    return discovered
+
+
 def _load_fastmcp_stdio_tools_from_config(config: Dict[str, Any]) -> List[AgentTool]:
     return []
 
 
 def _load_mcp_config() -> Dict[str, Any]:
-    """Load MCP config from TOML file specified by MCP_CONFIG_FILE (default: config/mcp.toml)."""
+    """Load MCP config from TOML or standard MCP JSON file (via MCP_CONFIG_FILE)."""
     path = Path(os.getenv("MCP_CONFIG_FILE", "config/mcp.toml"))
-    return tomllib.loads(path.read_text())
+    text = path.read_text()
+    if path.suffix.lower() == ".json":
+        return json.loads(text)
+    return tomllib.loads(text)
+
+
+def _normalize_mcp_config(raw: Dict[str, Any]) -> Dict[str, Any]:
+    """Normalize TOML-style or standard MCP JSON config into {stdio_servers, http_servers}."""
+    config: Dict[str, Any] = raw.get("mcp") if isinstance(raw.get("mcp"), dict) else raw
+
+    stdio_servers: List[Dict[str, Any]] = list(config.get("stdio_servers") or [])
+    http_servers: List[Dict[str, Any]] = list(config.get("http_servers") or [])
+
+    mcp_servers = config.get("mcpServers") or config.get("mcp_servers")
+    if isinstance(mcp_servers, dict):
+        for name, server in mcp_servers.items():
+            if not isinstance(server, dict):
+                continue
+            if server.get("url"):
+                http_servers.append(
+                    {
+                        "name": name,
+                        "url": server["url"],
+                        "headers": server.get("headers"),
+                        "auth": server.get("auth") or server.get("authorization_token"),
+                        "sse_read_timeout": server.get("sse_read_timeout"),
+                    }
+                )
+            elif server.get("command"):
+                stdio_servers.append(
+                    {
+                        "name": name,
+                        "command": server["command"],
+                        "args": server.get("args") or [],
+                        "env": server.get("env"),
+                        "cwd": server.get("cwd"),
+                    }
+                )
+
+    return {"stdio_servers": stdio_servers, "http_servers": http_servers}
 
 
 def build_default_registry() -> ToolRegistry:
     registry = ToolRegistry()
-    config = _load_mcp_config().get("mcp", {})
+    config = _normalize_mcp_config(_load_mcp_config())
 
     for stdio_server_tool in _discover_fastmcp_stdio_servers_from_config(config):
         registry.register(stdio_server_tool)
+
+    for http_server_tool in _discover_fastmcp_http_servers_from_config(config):
+        registry.register(http_server_tool)
 
     for stdio_tool in _load_fastmcp_stdio_tools_from_config(config):
         registry.register(stdio_tool)
