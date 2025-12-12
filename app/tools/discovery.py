@@ -70,9 +70,7 @@ def _discover_fastmcp_http_servers_from_config(config: Dict[str, Any]) -> List[A
     discovered: List[AgentTool] = []
 
     def handle_one(item: Dict[str, Any]) -> None:
-        url = item.get("url")
-        if not url:
-            raise ValueError(f"MCP http server missing url: {item}")
+        url = item["url"]
         client = _get_http_client(url, item.get("headers"), item.get("auth"), item.get("sse_read_timeout"))
         prefix = ""
         tools = client.list_tools()
@@ -106,4 +104,3 @@ def _discover_fastmcp_http_servers_from_config(config: Dict[str, Any]) -> List[A
 
 def _load_fastmcp_stdio_tools_from_config(config: Dict[str, Any]) -> List[AgentTool]:
     return []
-

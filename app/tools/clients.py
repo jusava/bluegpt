@@ -38,33 +38,29 @@ class _LoopRunner:
             self._loop.close()
 
 
-class MCPProcessClient:
-    """Persistent stdio client for a FastMCP server using the official FastMCP Client."""
+def _result_to_string(result: Any) -> str:
+    """Convert a CallToolResult (or similar) into a string payload."""
+    content = getattr(result, "content", None)
+    if isinstance(content, list) and content:
+        first = content[0]
+        text = getattr(first, "text", None) or getattr(first, "value", None)
+        if text is not None:
+            return str(text)
+    if hasattr(result, "model_dump"):
+        return json.dumps(result.model_dump(exclude_none=True, by_alias=True))
+    return json.dumps(result)
 
-    def __init__(
-        self,
-        command: str,
-        args: Optional[List[str]] = None,
-        env: Optional[Dict[str, str]] = None,
-        cwd: Optional[str] = None,
-    ) -> None:
-        self.command = command
-        self.args = args or []
-        self.env = env
-        self.cwd = cwd
+
+class _BaseMCPClient:
+    """Shared logic for FastMCP clients across transports."""
+
+    def __init__(self, transport: Any, client_name: str) -> None:
+        self.transport = transport
         self._lock = threading.Lock()
         self._runner = _LoopRunner()
-
-        self.transport = StdioTransport(
-            command=self.command,
-            args=self.args,
-            env=env,
-            cwd=cwd,
-            keep_alive=True,
-        )
         self.client = Client(
             self.transport,
-            name="bluegpt-stdio",
+            name=client_name,
             client_info=Implementation(name="bluegpt", version="1.0"),
         )
 
@@ -87,23 +83,7 @@ class MCPProcessClient:
         with self._lock:
             result = self._run(_call)
 
-        content = getattr(result, "content", None)
-        if isinstance(content, list) and content:
-            first = content[0]
-            text = getattr(first, "text", None) or getattr(first, "value", None)
-            if text is not None:
-                return str(text)
-
-        if hasattr(result, "model_dump"):
-            return json.dumps(result.model_dump(exclude_none=True, by_alias=True))
-        return json.dumps(result)
-
-    @property
-    def is_running(self) -> bool:
-        task = getattr(self.transport, "_connect_task", None)
-        if task is None:
-            return True
-        return not task.done()
+        return _result_to_string(result)
 
     def close(self) -> None:
         async def _close() -> None:
@@ -117,8 +97,45 @@ class MCPProcessClient:
             finally:
                 self._runner.close()
 
+    def _transport_running(self) -> bool:
+        return True
 
-class MCPHttpClient:
+    @property
+    def is_running(self) -> bool:
+        return self._transport_running()
+
+
+class MCPProcessClient(_BaseMCPClient):
+    """Persistent stdio client for a FastMCP server using the official FastMCP Client."""
+
+    def __init__(
+        self,
+        command: str,
+        args: Optional[List[str]] = None,
+        env: Optional[Dict[str, str]] = None,
+        cwd: Optional[str] = None,
+    ) -> None:
+        self.command = command
+        self.args = args or []
+        self.env = env
+        self.cwd = cwd
+
+        transport = StdioTransport(
+            command=self.command,
+            args=self.args,
+            env=env,
+            cwd=cwd,
+            keep_alive=True,
+        )
+        super().__init__(transport, client_name="bluegpt-stdio")
+
+    def _transport_running(self) -> bool:
+        task = getattr(self.transport, "_connect_task", None)
+        if task is None:
+            return True
+        return not task.done()
+
+class MCPHttpClient(_BaseMCPClient):
     """Persistent HTTP client for a FastMCP server using the official FastMCP Client."""
 
     def __init__(
@@ -132,66 +149,14 @@ class MCPHttpClient:
         self.headers = headers
         self.auth = auth
         self.sse_read_timeout = sse_read_timeout
-        self._lock = threading.Lock()
-        self._runner = _LoopRunner()
 
-        self.transport = StreamableHttpTransport(
+        transport = StreamableHttpTransport(
             url=self.url,
             headers=headers,
             auth=auth,
             sse_read_timeout=sse_read_timeout,
         )
-        self.client = Client(
-            self.transport,
-            name="bluegpt-http",
-            client_info=Implementation(name="bluegpt", version="1.0"),
-        )
-
-    def _run(self, async_fn: Callable[..., Awaitable[Any]], *args: Any, **kwargs: Any) -> Any:
-        return self._runner.run(async_fn(*args, **kwargs))
-
-    def list_tools(self) -> List[Any]:
-        async def _list() -> List[Any]:
-            async with self.client:
-                return await self.client.list_tools()
-
-        with self._lock:
-            return self._run(_list)
-
-    def call_tool(self, tool_name: str, arguments: Dict[str, Any]) -> str:
-        async def _call() -> Any:
-            async with self.client:
-                return await self.client.call_tool(tool_name, arguments or {})
-
-        with self._lock:
-            result = self._run(_call)
-
-        content = getattr(result, "content", None)
-        if isinstance(content, list) and content:
-            first = content[0]
-            text = getattr(first, "text", None) or getattr(first, "value", None)
-            if text is not None:
-                return str(text)
-
-        if hasattr(result, "model_dump"):
-            return json.dumps(result.model_dump(exclude_none=True, by_alias=True))
-        return json.dumps(result)
-
-    @property
-    def is_running(self) -> bool:
-        return True
-
-    def close(self) -> None:
-        async def _close() -> None:
-            await self.client.close()
-
-        with self._lock:
-            try:
-                self._run(_close)
-            except Exception:
-                logger.debug("Error closing FastMCP HTTP client", exc_info=True)
-            finally:
-                self._runner.close()
+        super().__init__(transport, client_name="bluegpt-http")
 
 
 _CLIENT_CACHE: Dict[tuple, MCPProcessClient] = {}
@@ -249,4 +214,3 @@ def _get_http_client(
         client = MCPHttpClient(url, headers=headers, auth=auth, sse_read_timeout=sse_read_timeout)
         _HTTP_CLIENT_CACHE[key] = client
         return client
-
