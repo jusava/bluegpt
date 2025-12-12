@@ -23,6 +23,29 @@ def _tfield(tool_def: Any, attr: str) -> Any:
     return None
 
 
+def _discover_tools_from_client(
+    client: Any,
+    *,
+    prefix: str,
+    make_tool: Any,
+) -> List[AgentTool]:
+    discovered: List[AgentTool] = []
+    tools = client.list_tools()
+    for tool_def in tools:
+        base_name = _tfield(tool_def, "name")
+        if not base_name:
+            raise ValueError(f"MCP tool missing name: {tool_def}")
+        name = f"{prefix}{base_name}"
+        description = _tfield(tool_def, "description") or ""
+        params = (
+            _tfield(tool_def, "input_schema")
+            or _tfield(tool_def, "parameters")
+            or {"type": "object", "additionalProperties": True}
+        )
+        discovered.append(make_tool(name, description, params))
+    return discovered
+
+
 def _discover_fastmcp_stdio_servers_from_config(config: Dict[str, Any]) -> List[AgentTool]:
     servers = config.get("stdio_servers", [])
     if not servers:
@@ -31,31 +54,26 @@ def _discover_fastmcp_stdio_servers_from_config(config: Dict[str, Any]) -> List[
     discovered: List[AgentTool] = []
 
     def handle_one(item: Dict[str, Any]) -> None:
-        client = _get_process_client(item["command"], item.get("args") or [], item.get("env"), item.get("cwd"))
-        prefix = ""
-        tools = client.list_tools()
-        for tool_def in tools:
-            base_name = _tfield(tool_def, "name")
-            if not base_name:
-                raise ValueError(f"MCP stdio tool missing name: {tool_def}")
-            name = f"{prefix}{base_name}"
-            description = _tfield(tool_def, "description") or ""
-            params = (
-                _tfield(tool_def, "input_schema")
-                or _tfield(tool_def, "parameters")
-                or {"type": "object", "additionalProperties": True}
-            )
-            discovered.append(
-                FastMCPStdioTool(
+        command = item["command"]
+        args = item.get("args") or []
+        env = item.get("env")
+        cwd = item.get("cwd")
+        client = _get_process_client(command, args, env, cwd)
+        discovered.extend(
+            _discover_tools_from_client(
+                client,
+                prefix="",
+                make_tool=lambda name, description, params: FastMCPStdioTool(
                     name=name,
                     description=description or "FastMCP stdio tool",
                     parameters=params,
-                    command=item["command"],
-                    args=item.get("args") or [],
-                    env=item.get("env"),
-                    cwd=item.get("cwd"),
-                )
+                    command=command,
+                    args=args,
+                    env=env,
+                    cwd=cwd,
+                ),
             )
+        )
 
     for item in servers:
         handle_one(item)
@@ -71,31 +89,25 @@ def _discover_fastmcp_http_servers_from_config(config: Dict[str, Any]) -> List[A
 
     def handle_one(item: Dict[str, Any]) -> None:
         url = item["url"]
-        client = _get_http_client(url, item.get("headers"), item.get("auth"), item.get("sse_read_timeout"))
-        prefix = ""
-        tools = client.list_tools()
-        for tool_def in tools:
-            base_name = _tfield(tool_def, "name")
-            if not base_name:
-                raise ValueError(f"MCP http tool missing name: {tool_def}")
-            name = f"{prefix}{base_name}"
-            description = _tfield(tool_def, "description") or ""
-            params = (
-                _tfield(tool_def, "input_schema")
-                or _tfield(tool_def, "parameters")
-                or {"type": "object", "additionalProperties": True}
-            )
-            discovered.append(
-                FastMCPHttpTool(
+        headers = item.get("headers")
+        auth = item.get("auth")
+        sse_read_timeout = item.get("sse_read_timeout")
+        client = _get_http_client(url, headers, auth, sse_read_timeout)
+        discovered.extend(
+            _discover_tools_from_client(
+                client,
+                prefix="",
+                make_tool=lambda name, description, params: FastMCPHttpTool(
                     name=name,
                     description=description or "FastMCP http tool",
                     parameters=params,
                     url=url,
-                    headers=item.get("headers"),
-                    auth=item.get("auth"),
-                    sse_read_timeout=item.get("sse_read_timeout"),
-                )
+                    headers=headers,
+                    auth=auth,
+                    sse_read_timeout=sse_read_timeout,
+                ),
             )
+        )
 
     for item in servers:
         handle_one(item)

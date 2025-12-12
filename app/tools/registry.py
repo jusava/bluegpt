@@ -1,9 +1,8 @@
-import asyncio
 import logging
 from dataclasses import dataclass, field
 from typing import Any, Awaitable, Callable, Dict, List
 
-from .clients import _get_http_client, _get_process_client, MCPHttpClient, MCPProcessClient
+from .clients import _get_http_client, _get_process_client
 
 logger = logging.getLogger(__name__)
 
@@ -33,7 +32,28 @@ class AgentTool:
         }
 
 
-class FastMCPStdioTool(AgentTool):
+class _FastMCPRemoteTool(AgentTool):
+    """Shared adapter for calling a FastMCP server over any transport."""
+
+    def __init__(
+        self,
+        name: str,
+        description: str,
+        parameters: Dict[str, Any],
+        *,
+        client_getter: Callable[[], Any],
+        source: str,
+    ) -> None:
+        self._client_getter = client_getter
+        super().__init__(name=name, description=description, parameters=parameters, handler=self._call)
+        self.source = source
+
+    async def _call(self, arguments: Dict[str, Any]) -> str:
+        client = self._client_getter()
+        return await asyncio.to_thread(client.call_tool, self.name, arguments or {})
+
+
+class FastMCPStdioTool(_FastMCPRemoteTool):
     """Adapter for calling a FastMCP server over stdio."""
 
     def __init__(
@@ -46,23 +66,24 @@ class FastMCPStdioTool(AgentTool):
         env: Dict[str, str] | None = None,
         cwd: str | None = None,
     ) -> None:
+        args_list = args or []
+        env_dict = env
+        cwd_val = cwd
         self.command = command
-        self.args = args or []
-        self.env = env
-        self.cwd = cwd
+        self.args = args_list
+        self.env = env_dict
+        self.cwd = cwd_val
 
-        super().__init__(name=name, description=description, parameters=parameters, handler=self._call_stdio)
-        self.source = "mcp-stdio"
-
-    def _client(self) -> MCPProcessClient:
-        return _get_process_client(self.command, self.args, self.env, self.cwd)
-
-    async def _call_stdio(self, arguments: Dict[str, Any]) -> str:
-        client = self._client()
-        return await asyncio.to_thread(client.call_tool, self.name, arguments or {})
+        super().__init__(
+            name=name,
+            description=description,
+            parameters=parameters,
+            client_getter=lambda: _get_process_client(command, args_list, env_dict, cwd_val),
+            source="mcp-stdio",
+        )
 
 
-class FastMCPHttpTool(AgentTool):
+class FastMCPHttpTool(_FastMCPRemoteTool):
     """Adapter for calling a FastMCP server over Streamable HTTP."""
 
     def __init__(
@@ -80,15 +101,13 @@ class FastMCPHttpTool(AgentTool):
         self.auth = auth
         self.sse_read_timeout = sse_read_timeout
 
-        super().__init__(name=name, description=description, parameters=parameters, handler=self._call_http)
-        self.source = "mcp-http"
-
-    def _client(self) -> MCPHttpClient:
-        return _get_http_client(self.url, self.headers, self.auth, self.sse_read_timeout)
-
-    async def _call_http(self, arguments: Dict[str, Any]) -> str:
-        client = self._client()
-        return await asyncio.to_thread(client.call_tool, self.name, arguments or {})
+        super().__init__(
+            name=name,
+            description=description,
+            parameters=parameters,
+            client_getter=lambda: _get_http_client(url, headers, auth, sse_read_timeout),
+            source="mcp-http",
+        )
 
 
 class ToolRegistry:
@@ -129,4 +148,3 @@ class ToolRegistry:
         if name not in self._tools:
             raise KeyError(f"Tool '{name}' is not registered")
         self._active[name] = bool(active)
-
