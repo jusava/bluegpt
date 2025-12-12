@@ -67,7 +67,7 @@ Local-first chat UI powered by the OpenAI **Responses API**, a FastAPI backend, 
 ### Project layout
 - `app/main.py` FastAPI surface and endpoints.
 - `app/agent.py` agent loop, OpenAI client wiring, and in-memory session store.
-- `app/tools.py` FastMCP stdio integration and tool registry.
+- `app/tools/` FastMCP stdio/HTTP integration and tool registry.
 - `app/static/*` static frontend (no bundler).
 - `config/*.toml` configuration files; see above for overrides.
 - `mcps/` sample FastMCP servers; `tests/` basic smoke tests.
