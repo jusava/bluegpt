@@ -1,15 +1,21 @@
 """Simple script/notebook-style example to call the agent API directly."""
+import argparse
 import asyncio
 import json
-import os
 
 import httpx
 
-BASE_URL = os.getenv("BLUEGPT_BASE_URL", "http://localhost:8000")
+DEFAULT_BASE_URL = "http://localhost:8000"
 
 
-async def main() -> None:
-    async with httpx.AsyncClient(base_url=BASE_URL, timeout=30.0) as client:
+def parse_args() -> argparse.Namespace:
+    parser = argparse.ArgumentParser(description="Call the BlueGPT HTTP API.")
+    parser.add_argument("--base-url", default=DEFAULT_BASE_URL, help=f"API base URL (default: {DEFAULT_BASE_URL})")
+    return parser.parse_args()
+
+
+async def main(base_url: str) -> None:
+    async with httpx.AsyncClient(base_url=base_url, timeout=30.0) as client:
         # Start a new chat
         payload = {"message": "Hello!"}
         r = await client.post("/api/chat", json=payload)
@@ -34,4 +40,5 @@ async def main() -> None:
 
 
 if __name__ == "__main__":
-    asyncio.run(main())
+    args = parse_args()
+    asyncio.run(main(args.base_url))

@@ -1,15 +1,15 @@
-import os
 import tomllib
 from pathlib import Path
 from typing import Any, Dict, List, Tuple
 
+from ..common.config import project_path
 from .clients import get_client
 from .registry import AgentTool, FastMCPTool
 
 
-def load_mcp_config() -> Dict[str, Any]:
-    path = Path(os.getenv("MCP_CONFIG_FILE", "config/mcp.toml"))
-    data: Dict[str, Any] = tomllib.loads(path.read_text())
+def load_mcp_config(path: str | Path = "config/mcp.toml") -> Dict[str, Any]:
+    config_path = project_path(path)
+    data: Dict[str, Any] = tomllib.loads(config_path.read_text())
     return data.get("mcp") or {}
 
 
@@ -33,8 +33,19 @@ def server_specs_from_config(config: Dict[str, Any]) -> List[Tuple[str, Any]]:
         server_def.pop("name", None)
 
         if set(server_def.keys()) == {"url"}:
-            specs.append((name, server_def["url"]))
+            url = server_def["url"]
+            if isinstance(url, str) and "://" not in url:
+                url = str(project_path(url))
+            specs.append((name, url))
             continue
+
+        cwd = server_def.get("cwd")
+        if cwd is None or cwd == "":
+            server_def["cwd"] = str(project_path("."))
+        else:
+            cwd_path = Path(str(cwd))
+            if not cwd_path.is_absolute():
+                server_def["cwd"] = str(project_path(cwd_path))
 
         specs.append((name, {"mcpServers": {name: server_def}}))
 
@@ -68,4 +79,3 @@ async def discover_tools(servers: List[Tuple[str, Any]]) -> List[AgentTool]:
             )
 
     return discovered
-

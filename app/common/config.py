@@ -1,5 +1,5 @@
-import os
 import tomllib
+from functools import lru_cache
 from pathlib import Path
 from typing import Any, Dict
 
@@ -9,9 +9,33 @@ def _load_toml(path: Path) -> Dict[str, Any]:
     return tomllib.loads(path.read_text())
 
 
+@lru_cache
+def project_root() -> Path:
+    """Locate the project root regardless of the current working directory."""
+
+    start = Path(__file__).resolve()
+    for parent in start.parents:
+        if (parent / "pyproject.toml").is_file():
+            return parent
+        if (parent / "config" / "config.toml").is_file():
+            return parent
+
+    # Fallback: <root>/app/common/config.py -> <root> is two levels up from `app/`.
+    return start.parents[2] if len(start.parents) >= 3 else start.parent
+
+
+PROJECT_ROOT = project_root()
+
+
+def project_path(*parts: str | Path) -> Path:
+    path = PROJECT_ROOT
+    for part in parts:
+        path = path / part
+    return path
+
+
 def load_app_config(path: str | None = None) -> Dict[str, Any]:
-    # Hardcoded path, no env var fallback
-    config_path = Path(path or "config/config.toml")
+    config_path = project_path(path or "config/config.toml")
     data = _load_toml(config_path)
 
     app_cfg = data["app"]
@@ -29,13 +53,13 @@ def load_app_config(path: str | None = None) -> Dict[str, Any]:
 
 
 def load_prompts_config(path: str | None = None) -> Dict[str, str]:
-    config_path = Path(path or "config/prompts.toml")
+    config_path = project_path(path or "config/prompts.toml")
     data = _load_toml(config_path)
     return {"system": data["prompts"]["system"]}
 
 
 def load_samples_config(path: str | None = None) -> list[Dict[str, str]]:
-    config_path = Path(path or "config/samples.toml")
+    config_path = project_path(path or "config/samples.toml")
     data = _load_toml(config_path)
 
     samples = data["samples"]

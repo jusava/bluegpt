@@ -1,3 +1,4 @@
+from app.common.config import project_path
 from app.tools.mcp import server_specs_from_config
 
 
@@ -29,7 +30,7 @@ def test_server_specs_full_config() -> None:
                 "transport": "stdio",
                 "command": "python",
                 "args": ["./server.py", "--verbose"],
-                "cwd": ".",
+                "cwd": str(project_path(".")),
             }
         }
     }

@@ -1,5 +1,4 @@
 import logging
-import os
 from contextlib import asynccontextmanager
 from pathlib import Path
 from typing import AsyncGenerator
@@ -9,21 +8,21 @@ from fastapi.middleware.cors import CORSMiddleware
 from fastapi.staticfiles import StaticFiles
 
 from ..agent import AgentManager
-from ..common.config import load_samples_config
+from ..common.config import load_samples_config, project_path
 from ..tools.clients import close_all_clients
 from .routes import build_router
 
 
 def create_app() -> FastAPI:
     logging.basicConfig(
-        level=os.getenv("LOG_LEVEL", "INFO"),
+        level=logging.INFO,
         format="%(asctime)s [%(levelname)s] %(name)s: %(message)s",
     )
     logger = logging.getLogger(__name__)
 
     manager = AgentManager()
     samples = load_samples_config()
-    static_dir = Path(__file__).resolve().parent.parent / "static"
+    static_dir = project_path("app", "static")
 
     @asynccontextmanager
     async def lifespan(_: FastAPI) -> AsyncGenerator[None, None]:

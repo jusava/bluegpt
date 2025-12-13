@@ -6,8 +6,8 @@ This document captures how the agentic flow in BlueGPT works, how tools are disc
 
 - **Frontend:** Static chat UI (`app/static/*`) that uses `/api/chat/stream` (SSE) and surfaces tool/reasoning events, model selector, generation controls, and tool toggles.
 - **Backend:** FastAPI (`app/main.py` entrypoint; `app/web/*` routes) with `AgentManager`/`AgentSession` (`app/agent/*`) orchestrating OpenAI Responses API calls, reasoning output, and the local tool loop. Sessions live in memory per `chat_id`.
-- **Tools:** `ToolRegistry` (`app/tools.py`) auto-discovers FastMCP tools from `config/mcp.toml` (default). If a server entry only has `url`, BlueGPT passes that value directly to the FastMCP `Client` (transport inferred); if the entry has additional fields, it is passed as a full MCPConfig structure. Discovered tools are exposed to OpenAI as function tools.
-- **Config:** `app/common/config.py` loads TOML files for app defaults, prompts, samples, and MCP servers; file locations can be overridden via env (`APP_CONFIG_FILE`, `PROMPTS_CONFIG_FILE`, `SAMPLES_CONFIG_FILE`, `MCP_CONFIG_FILE`).
+- **Tools:** `ToolRegistry` (`app/tools/registry.py`) auto-discovers FastMCP tools from `config/mcp.toml`. If a server entry only has `url`, BlueGPT passes that value directly to the FastMCP `Client` (transport inferred); if the entry has additional fields, it is passed as a full MCPConfig structure. Discovered tools are exposed to OpenAI as function tools.
+- **Config:** `app/common/config.py` loads TOML files for app defaults, prompts, and UI samples. MCP server config is loaded in `app/tools/mcp.py`.
 
 ## Request Flow
 
@@ -20,18 +20,19 @@ This document captures how the agentic flow in BlueGPT works, how tools are disc
 
 ## Tool Registration
 
-- Loaded at startup in `build_default_registry()`, reading `MCP_CONFIG_FILE` (default `config/mcp.toml`).
+- Loaded at startup in `build_default_registry()`, reading `config/mcp.toml`.
 - Each `mcp.servers` entry is connected via the FastMCP `Client` (stdio starts a subprocess; http connects to a URL). Tools are registered with their original name and schema, marked `source="mcp:{server_name}"`.
 - `prefix` is not applied; names must match what the MCP server returns.
 - Tool activation toggles are stored in-memory; `/api/tools/{name}/active` and the UI settings panel flip them on/off for subsequent turns.
 
 ## Config Files and Env
 
-- `APP_CONFIG_FILE` → defaults for model list, reasoning effort options, text verbosity, and max output tokens (`config/config.toml` by default).
-- `PROMPTS_CONFIG_FILE` → system prompt for new chats (`config/prompts.toml` by default).
-- `SAMPLES_CONFIG_FILE` → UI suggestion cards (`config/samples.toml` by default).
-- `MCP_CONFIG_FILE` → FastMCP stdio servers (`config/mcp.toml` by default).
-- `.env` loads `OPENAI_API_KEY` (required) and `OPENAI_BASE_URL` (optional). MCP tool definitions are not read from env.
+- `config/config.toml` → defaults for model list, reasoning effort options, text verbosity, and max output tokens.
+- `config/prompts.toml` → system prompt for new chats.
+- `config/samples.toml` → UI suggestion cards.
+- `config/mcp.toml` → FastMCP stdio/HTTP servers to auto-discover tools from.
+- `.env` may be used to set `OPENAI_API_KEY` (required).
+  All paths are resolved relative to the project root (the directory containing `pyproject.toml`), not the current working directory.
 
 ## FastMCP Quickstart (stdio)
 

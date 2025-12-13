@@ -2,15 +2,14 @@
 Run with: uv run python backend_example.py
 """
 import asyncio
-import os
 
 from app.agent import AgentManager
 
 
 async def main() -> None:
-    # Manager uses default registry/model from env.
+    # Manager uses defaults from config files.
     manager = AgentManager()
-    session = manager.get_or_create(system_prompt=None, model=os.getenv("OPENAI_MODEL"))
+    session = manager.get_or_create()
 
     reply1 = await session.run("Hello!")
     print("First reply:\n", reply1)

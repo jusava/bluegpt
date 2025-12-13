@@ -2,11 +2,11 @@ import logging
 
 from dotenv import load_dotenv
 
-from ..common.config import load_app_config, load_prompts_config
+from ..common.config import load_app_config, load_prompts_config, project_path
 
 
 # Load .env early so environment variables are available even if main is not imported.
-load_dotenv()
+load_dotenv(dotenv_path=project_path(".env"))
 
 logger = logging.getLogger(__name__)
 

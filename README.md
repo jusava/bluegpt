@@ -17,7 +17,7 @@ Local-first chat UI powered by the OpenAI **Responses API**, a FastAPI backend, 
    pip install -e .
    ```
    (Alternatively, `uv run uvicorn app.main:app --reload` if you use uv.)
-2. Copy `.env.example` to `.env` and set `OPENAI_API_KEY` (and optionally `OPENAI_BASE_URL`):
+2. Copy `.env.example` to `.env` and set `OPENAI_API_KEY`:
    ```bash
    cp .env.example .env
    ```
@@ -28,10 +28,10 @@ Local-first chat UI powered by the OpenAI **Responses API**, a FastAPI backend, 
 4. Open `http://localhost:8000/` in a browser.
 
 ### Configuration
-- `config/config.toml` (override with `APP_CONFIG_FILE`): default model, allowed models, reasoning effort defaults, text verbosity, and max output tokens.
-- `config/prompts.toml` (override with `PROMPTS_CONFIG_FILE`): system prompt injected into new chats.
-- `config/samples.toml` (override with `SAMPLES_CONFIG_FILE`): quick-start suggestion cards shown in the UI.
-- `config/mcp.toml` (override with `MCP_CONFIG_FILE`): FastMCP servers to auto-discover tools from. Shorthand entries with only `url` are passed directly to `fastmcp.Client(...)` (transport inferred); entries with extra fields are treated as full MCP server configs. Example:
+- `config/config.toml`: default model, allowed models, reasoning effort defaults, text verbosity, max output tokens, and OpenAI base URL.
+- `config/prompts.toml`: system prompt injected into new chats.
+- `config/samples.toml`: quick-start suggestion cards shown in the UI.
+- `config/mcp.toml`: FastMCP servers to auto-discover tools from. Shorthand entries with only `url` are passed directly to `fastmcp.Client(...)` (transport inferred); entries with extra fields are treated as full MCP server configs. Example:
   ```toml
   [mcp]
   [[mcp.servers]]
@@ -40,6 +40,7 @@ Local-first chat UI powered by the OpenAI **Responses API**, a FastAPI backend, 
   # env = { EXAMPLE = "1" }
   ```
   Each server is discovered at backend boot and its tools are registered without renaming, so tool names match the server definitions.
+  Config file paths (and shorthand MCP `url` paths like `mcps/time_helper.py`) are resolved relative to the project root (the directory containing `pyproject.toml`), not the current working directory.
 
 ### MCP quickstart
 - The repo includes `mcps/time_helper.py` (FastMCP) exposing `current_time` and `find_timezone`.
