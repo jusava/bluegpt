@@ -13,16 +13,10 @@ def load_app_config(path: str | None = None) -> Dict[str, Any]:
     # Hardcoded path, no env var fallback
     config_path = Path(path or "config/config.toml")
     data = _load_toml(config_path)
-    
-    # Strict key access - will raise KeyError if missing
+
     app_cfg = data["app"]
-    search_cfg = data.get("search", {})  # generic section might be optional or handled elsewhere? 
-    # Actually user said "rely on entries in the toml without fallbacks".
-    # But usually top-level sections existence... I'll assume strictly required.
-    
-    # Wait, `reasoning` section was in config.toml.
     reasoning_cfg = data["reasoning"]
-    
+
     return {
         "default_model": app_cfg["default_model"],
         "available_models": app_cfg["available_models"],
@@ -43,7 +37,7 @@ def load_prompts_config(path: str | None = None) -> Dict[str, str]:
 def load_samples_config(path: str | None = None) -> list[Dict[str, str]]:
     config_path = Path(path or "config/samples.toml")
     data = _load_toml(config_path)
-    
+
     samples = data["samples"]
     # We expect a list of dicts with specific keys
     return [

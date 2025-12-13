@@ -5,9 +5,9 @@ This document captures how the agentic flow in BlueGPT works, how tools are disc
 ## Architecture
 
 - **Frontend:** Static chat UI (`app/static/*`) that uses `/api/chat/stream` (SSE) and surfaces tool/reasoning events, model selector, generation controls, and tool toggles.
-- **Backend:** FastAPI (`app/main.py`) with `AgentManager`/`AgentSession` (`app/agent.py`) orchestrating OpenAI Responses API calls, reasoning output, and the local tool loop. Sessions live in memory per `chat_id`.
+- **Backend:** FastAPI (`app/main.py` entrypoint; `app/web/*` routes) with `AgentManager`/`AgentSession` (`app/agent/*`) orchestrating OpenAI Responses API calls, reasoning output, and the local tool loop. Sessions live in memory per `chat_id`.
 - **Tools:** `ToolRegistry` (`app/tools.py`) auto-discovers FastMCP tools from `config/mcp.toml` (default). If a server entry only has `url`, BlueGPT passes that value directly to the FastMCP `Client` (transport inferred); if the entry has additional fields, it is passed as a full MCPConfig structure. Discovered tools are exposed to OpenAI as function tools.
-- **Config:** `app/config.py` loads TOML files for app defaults, prompts, samples, and MCP servers; file locations can be overridden via env (`APP_CONFIG_FILE`, `PROMPTS_CONFIG_FILE`, `SAMPLES_CONFIG_FILE`, `MCP_CONFIG_FILE`).
+- **Config:** `app/common/config.py` loads TOML files for app defaults, prompts, samples, and MCP servers; file locations can be overridden via env (`APP_CONFIG_FILE`, `PROMPTS_CONFIG_FILE`, `SAMPLES_CONFIG_FILE`, `MCP_CONFIG_FILE`).
 
 ## Request Flow
 
