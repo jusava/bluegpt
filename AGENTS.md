@@ -4,7 +4,7 @@ This document captures how the agentic flow in BlueGPT works, how tools are disc
 
 ## Architecture
 
-- **Frontend:** Static chat UI (`app/static/*`) that uses `/api/chat/stream` (SSE) and surfaces tool/reasoning events, model selector, generation controls, and tool toggles.
+- **Frontend:** Static chat UI (`app/web/static/*`) that uses `/api/chat/stream` (SSE) and surfaces tool/reasoning events, model selector, generation controls, and tool toggles.
 - **Backend:** FastAPI (`app/main.py` entrypoint; `app/web/*` routes) with `AgentManager`/`AgentSession` (`app/agent/*`) orchestrating OpenAI Responses API calls, reasoning output, and the local tool loop. Sessions live in memory per `chat_id`.
 - **Tools:** `ToolRegistry` (`app/tools/registry.py`) auto-discovers FastMCP tools from `config/mcp.toml`. If a server entry only has `url`, BlueGPT passes that value directly to the FastMCP `Client` (transport inferred); if the entry has additional fields, it is passed as a full MCPConfig structure. Discovered tools are exposed to OpenAI as function tools.
 - **Config:** `app/common/config.py` loads TOML files for app defaults, prompts, and UI samples. MCP server config is loaded in `app/tools/mcp.py`.
@@ -53,4 +53,4 @@ If you use the shorthand `url = "path/to/server.py"` config, ensure you're runni
 ## Troubleshooting
 
 - No MCP tools: check startup logs for FastMCP launch failures; validate `config/mcp.toml` path and that `fastmcp` is installed.
-- Streaming shows raw SSE lines: hard-refresh; the SSE parser is in `app/static/ui/stream.js`.
+- Streaming shows raw SSE lines: hard-refresh; the SSE parser is in `app/web/static/ui/stream.js`.

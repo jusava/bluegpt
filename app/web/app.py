@@ -22,7 +22,7 @@ def create_app() -> FastAPI:
 
     manager = AgentManager()
     samples = load_samples_config()
-    static_dir = project_path("app", "static")
+    static_dir = project_path("app", "web", "static")
 
     @asynccontextmanager
     async def lifespan(_: FastAPI) -> AsyncGenerator[None, None]:
