@@ -4,16 +4,15 @@ Public surface is re-exported here so callers can keep using
 `from app.tools import ToolRegistry, build_default_registry`, etc.
 """
 
-from .config import _load_mcp_config, _server_specs_from_config
-from .discovery import _discover_fastmcp_tools
+from .mcp import discover_tools, load_mcp_config, server_specs_from_config
 from .registry import AgentTool, FastMCPTool, ToolRegistry
 
 
-def build_default_registry() -> ToolRegistry:
+async def build_default_registry() -> ToolRegistry:
     registry = ToolRegistry()
-    _, config = _load_mcp_config()
-    servers = _server_specs_from_config(config)
-    for tool in _discover_fastmcp_tools(servers):
+    config = load_mcp_config()
+    servers = server_specs_from_config(config)
+    for tool in await discover_tools(servers):
         registry.register(tool)
 
     return registry

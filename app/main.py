@@ -2,6 +2,7 @@ import asyncio
 import json
 import logging
 import os
+from contextlib import asynccontextmanager
 from pathlib import Path
 from typing import AsyncGenerator, List
 
@@ -17,6 +18,7 @@ from .agent import AgentManager, AVAILABLE_MODELS, DEFAULT_SYSTEM_PROMPT, DEFAUL
 from .config import load_samples_config
 from .schemas import ChatRequest, ToolActiveUpdate, ModelUpdate, GenerationUpdate
 from .utils import chunk_text
+from .tools.clients import close_all_clients
 
 load_dotenv()
 
@@ -26,7 +28,21 @@ logging.basicConfig(
 )
 logger = logging.getLogger(__name__)
 
-app = FastAPI(title="BlueGPT", version="0.1.0")
+manager = AgentManager()
+SAMPLES = load_samples_config()
+
+
+@asynccontextmanager
+async def lifespan(_: FastAPI) -> AsyncGenerator[None, None]:
+    await manager.load_tools()
+    logger.info("Tool registry loaded: %s", manager.registry.summary())
+    try:
+        yield
+    finally:
+        await close_all_clients()
+
+
+app = FastAPI(title="BlueGPT", version="0.1.0", lifespan=lifespan)
 
 app.add_middleware(
     CORSMiddleware,
@@ -37,10 +53,6 @@ app.add_middleware(
 
 static_dir = Path(__file__).parent / "static"
 app.mount("/static", StaticFiles(directory=static_dir), name="static")
-
-manager = AgentManager()
-logger.info("Tool registry loaded: %s", manager.registry.summary())
-SAMPLES = load_samples_config()
 
 
 @app.get("/health")

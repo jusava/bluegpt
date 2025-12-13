@@ -2,13 +2,14 @@ import hashlib
 import json
 import threading
 from pathlib import Path
-from typing import Any, Dict, List, Optional
+from typing import Any, Dict
 
-from .base import _BaseMCPClient
+from fastmcp import Client
+from mcp.types import Implementation
 
-
-_CLIENT_CACHE: Dict[str, _BaseMCPClient] = {}
+_CLIENT_CACHE: Dict[str, Client] = {}
 _CLIENT_CACHE_LOCK = threading.Lock()
+_CLIENT_INFO = Implementation(name="bluegpt", version="1.0")
 
 
 def _json_default(obj: Any) -> Any:
@@ -28,18 +29,30 @@ def _spec_cache_key(spec: Any) -> str:
     return hashlib.sha256(dumped.encode("utf-8")).hexdigest()
 
 
-def _get_client(spec: Any) -> _BaseMCPClient:
+def get_client(spec: Any) -> Client:
     key = _spec_cache_key(spec)
     with _CLIENT_CACHE_LOCK:
         client = _CLIENT_CACHE.get(key)
-        if client and client.is_running:
-            return client
-        client = _BaseMCPClient(spec, client_name="bluegpt-mcp")
-        _CLIENT_CACHE[key] = client
+        if client is None:
+            client = Client(spec, name="bluegpt-mcp", client_info=_CLIENT_INFO)
+            _CLIENT_CACHE[key] = client
         return client
 
 
+async def close_all_clients() -> None:
+    with _CLIENT_CACHE_LOCK:
+        clients = list(_CLIENT_CACHE.values())
+        _CLIENT_CACHE.clear()
+
+    for client in clients:
+        try:
+            await client.close()
+        except Exception:
+            pass
+
+
 __all__ = [
-    "_BaseMCPClient",
-    "_get_client",
+    "get_client",
+    "close_all_clients",
 ]
+

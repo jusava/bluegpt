@@ -140,13 +140,18 @@ class AgentSession:
 
 class AgentManager:
     def __init__(self, registry: Optional[ToolRegistry] = None) -> None:
-        self.registry = registry or build_default_registry()
+        self.registry = registry or ToolRegistry()
         self.sessions: Dict[str, AgentSession] = {}
         self.current_model = DEFAULT_MODEL
         self.reasoning_effort = DEFAULT_REASONING
         self.text_verbosity = DEFAULT_VERBOSITY
         self.max_output_tokens = DEFAULT_MAX_OUTPUT_TOKENS
         self.reasoning_options: Dict[str, List[str]] = REASONING_OPTIONS
+
+    async def load_tools(self) -> None:
+        self.registry = await build_default_registry()
+        for session in self.sessions.values():
+            session.registry = self.registry
 
     def get_or_create(
         self,

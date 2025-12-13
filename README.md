@@ -44,6 +44,7 @@ Local-first chat UI powered by the OpenAI **Responses API**, a FastAPI backend, 
 ### MCP quickstart
 - The repo includes `mcps/time_helper.py` (FastMCP) exposing `current_time` and `find_timezone`.
 - With the sample `config/mcp.toml`, the FastAPI app will launch the stdio FastMCP process automatically on startup.
+- If you use `url = "path/to/server.py"` shorthand, run the app from a Python env where `fastmcp` is installed.
 - If you want to run it manually over stdio: `fastmcp run mcps/time_helper.py:mcp`.
 - For an HTTP example, start `mcps/time_helper_http.py` (serves on `http://127.0.0.1:9001/mcp`) and add another `[[mcp.servers]]` entry.
 

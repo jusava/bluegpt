@@ -47,6 +47,7 @@ uv run uvicorn app.main:app --reload
 ```
 
 Ensure `OPENAI_API_KEY` is set (via `.env`). For MCP stdio, ensure `fastmcp` CLI is in PATH (same venv recommended).
+If you use the shorthand `url = "path/to/server.py"` config, ensure you're running under a Python environment with `fastmcp` installed.
 
 ## Troubleshooting
 

@@ -1,9 +1,10 @@
 import logging
 import asyncio
+import json
 from dataclasses import dataclass, field
 from typing import Any, Awaitable, Callable, Dict, List
 
-from .clients import _get_client
+from .clients import get_client
 
 logger = logging.getLogger(__name__)
 
@@ -33,28 +34,22 @@ class AgentTool:
         }
 
 
-class _FastMCPRemoteTool(AgentTool):
-    """Shared adapter for calling a FastMCP server over any transport."""
-
-    def __init__(
-        self,
-        name: str,
-        description: str,
-        parameters: Dict[str, Any],
-        *,
-        client_getter: Callable[[], Any],
-        source: str,
-    ) -> None:
-        self._client_getter = client_getter
-        super().__init__(name=name, description=description, parameters=parameters, handler=self._call)
-        self.source = source
-
-    async def _call(self, arguments: Dict[str, Any]) -> str:
-        client = self._client_getter()
-        return await asyncio.to_thread(client.call_tool, self.name, arguments or {})
+def _result_to_string(result: Any) -> str:
+    content = getattr(result, "content", None)
+    if isinstance(content, list) and content:
+        first = content[0]
+        text = getattr(first, "text", None) or getattr(first, "value", None)
+        if text is not None:
+            return str(text)
+    if hasattr(result, "model_dump"):
+        return json.dumps(result.model_dump(exclude_none=True, by_alias=True))
+    try:
+        return json.dumps(result)
+    except TypeError:
+        return str(result)
 
 
-class FastMCPTool(_FastMCPRemoteTool):
+class FastMCPTool(AgentTool):
     """Adapter for calling a FastMCP server using FastMCP Client inference."""
 
     def __init__(
@@ -67,13 +62,14 @@ class FastMCPTool(_FastMCPRemoteTool):
         source: str,
     ) -> None:
         self.client_spec = client_spec
-        super().__init__(
-            name=name,
-            description=description,
-            parameters=parameters,
-            client_getter=lambda: _get_client(client_spec),
-            source=source,
-        )
+        super().__init__(name=name, description=description, parameters=parameters, handler=self._call)
+        self.source = source
+
+    async def _call(self, arguments: Dict[str, Any]) -> str:
+        client = get_client(self.client_spec)
+        async with client:
+            result = await client.call_tool(self.name, arguments or {})
+        return _result_to_string(result)
 
 
 class ToolRegistry:
