@@ -3,7 +3,7 @@ import asyncio
 from dataclasses import dataclass, field
 from typing import Any, Awaitable, Callable, Dict, List
 
-from .clients import _get_http_client, _get_process_client
+from .clients import _get_client
 
 logger = logging.getLogger(__name__)
 
@@ -54,60 +54,25 @@ class _FastMCPRemoteTool(AgentTool):
         return await asyncio.to_thread(client.call_tool, self.name, arguments or {})
 
 
-class FastMCPStdioTool(_FastMCPRemoteTool):
-    """Adapter for calling a FastMCP server over stdio."""
+class FastMCPTool(_FastMCPRemoteTool):
+    """Adapter for calling a FastMCP server using FastMCP Client inference."""
 
     def __init__(
         self,
         name: str,
         description: str,
         parameters: Dict[str, Any],
-        command: str,
-        args: List[str] | None = None,
-        env: Dict[str, str] | None = None,
-        cwd: str | None = None,
+        *,
+        client_spec: Any,
+        source: str,
     ) -> None:
-        args_list = args or []
-        env_dict = env
-        cwd_val = cwd
-        self.command = command
-        self.args = args_list
-        self.env = env_dict
-        self.cwd = cwd_val
-
+        self.client_spec = client_spec
         super().__init__(
             name=name,
             description=description,
             parameters=parameters,
-            client_getter=lambda: _get_process_client(command, args_list, env_dict, cwd_val),
-            source="mcp-stdio",
-        )
-
-
-class FastMCPHttpTool(_FastMCPRemoteTool):
-    """Adapter for calling a FastMCP server over Streamable HTTP."""
-
-    def __init__(
-        self,
-        name: str,
-        description: str,
-        parameters: Dict[str, Any],
-        url: str,
-        headers: Dict[str, str] | None = None,
-        auth: Any = None,
-        sse_read_timeout: Any = None,
-    ) -> None:
-        self.url = url
-        self.headers = headers
-        self.auth = auth
-        self.sse_read_timeout = sse_read_timeout
-
-        super().__init__(
-            name=name,
-            description=description,
-            parameters=parameters,
-            client_getter=lambda: _get_http_client(url, headers, auth, sse_read_timeout),
-            source="mcp-http",
+            client_getter=lambda: _get_client(client_spec),
+            source=source,
         )
 
 

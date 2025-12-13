@@ -1,11 +1,25 @@
 [mcp]
 
-# Example FastMCP stdio server (auto-discover tools)
-[[mcp.stdio_servers]]
-command = "fastmcp"
-args = ["run", "mcps/time_helper.py:mcp"]
-cwd = "."
+# Servers are configured as a list. If an entry only has `url`, BlueGPT passes
+# it directly to `fastmcp.Client(...)` (transport inference from URL/path).
+#
+# If an entry has additional fields, it is treated as a full MCP server config
+# and passed to `Client(...)` as an MCPConfig structure.
 
-# Example FastMCP HTTP server (run mcps/time_helper_http.py first)
-# [[mcp.http_servers]]
+# Shorthand: URL/path only (auto-infer transport)
+[[mcp.servers]]
+name = "time_helper"
+url = "mcps/time_helper.py"
+
+# Shorthand: remote HTTP server (run `mcps/time_helper_http.py` first)
+# [[mcp.servers]]
+# name = "time_helper_http"
 # url = "http://127.0.0.1:9001/mcp"
+
+# Full config example (command/args/env/cwd)
+# [[mcp.servers]]
+# name = "time_helper_cli"
+# transport = "stdio"
+# command = "fastmcp"
+# args = ["run", "mcps/time_helper.py:mcp"]
+# cwd = "."

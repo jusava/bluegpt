@@ -51,14 +51,19 @@ def _result_to_string(result: Any) -> str:
 
 
 class _BaseMCPClient:
-    """Shared logic for FastMCP clients across transports."""
+    """Thread-safe sync wrapper around the official FastMCP Client.
 
-    def __init__(self, transport: Any, client_name: str) -> None:
-        self.transport = transport
+    FastMCP can infer the right transport (stdio/http/config/etc) from the
+    object passed as the first argument to `Client(...)`, so this wrapper stays
+    transport-agnostic.
+    """
+
+    def __init__(self, spec: Any, client_name: str) -> None:
+        self.spec = spec
         self._lock = threading.Lock()
         self._runner = _LoopRunner()
         self.client = Client(
-            self.transport,
+            self.spec,
             name=client_name,
             client_info=Implementation(name="bluegpt", version="1.0"),
         )
@@ -96,9 +101,20 @@ class _BaseMCPClient:
                 self._runner.close()
 
     def _transport_running(self) -> bool:
+        # Stdio transports keep a background connect task; if it has completed,
+        # FastMCP will not reconnect automatically while the task is still set.
+        # Unwrap nested transports (e.g. MCPConfigTransport -> .transport).
+        transport = getattr(self.client, "transport", None)
+        for _ in range(5):
+            task = getattr(transport, "_connect_task", None)
+            if task is not None:
+                return not task.done()
+            next_transport = getattr(transport, "transport", None)
+            if next_transport is None or next_transport is transport:
+                break
+            transport = next_transport
         return True
 
     @property
     def is_running(self) -> bool:
         return self._transport_running()
-

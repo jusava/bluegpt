@@ -6,7 +6,7 @@ This document captures how the agentic flow in BlueGPT works, how tools are disc
 
 - **Frontend:** Static chat UI (`app/static/*`) that uses `/api/chat/stream` (SSE) and surfaces tool/reasoning events, model selector, generation controls, and tool toggles.
 - **Backend:** FastAPI (`app/main.py`) with `AgentManager`/`AgentSession` (`app/agent.py`) orchestrating OpenAI Responses API calls, reasoning output, and the local tool loop. Sessions live in memory per `chat_id`.
-- **Tools:** `ToolRegistry` (`app/tools.py`) auto-discovers FastMCP stdio tools from `config/mcp.toml` (default). No HTTP tools or manual schemas; each MCP process is started and kept per-command via `MCPProcessClient` and exposed to OpenAI as function tools.
+- **Tools:** `ToolRegistry` (`app/tools.py`) auto-discovers FastMCP tools from `config/mcp.toml` (default). If a server entry only has `url`, BlueGPT passes that value directly to the FastMCP `Client` (transport inferred); if the entry has additional fields, it is passed as a full MCPConfig structure. Discovered tools are exposed to OpenAI as function tools.
 - **Config:** `app/config.py` loads TOML files for app defaults, prompts, samples, and MCP servers; file locations can be overridden via env (`APP_CONFIG_FILE`, `PROMPTS_CONFIG_FILE`, `SAMPLES_CONFIG_FILE`, `MCP_CONFIG_FILE`).
 
 ## Request Flow
@@ -21,8 +21,8 @@ This document captures how the agentic flow in BlueGPT works, how tools are disc
 ## Tool Registration
 
 - Loaded at startup in `build_default_registry()`, reading `MCP_CONFIG_FILE` (default `config/mcp.toml`).
-- Each `[[mcp.stdio_servers]]` entry starts a FastMCP process (`command`, `args`, optional `env`/`cwd`). `MCPProcessClient` handshakes (`initialize`, `tools/list`) and registers every tool with its original name and schema, marked `source="mcp-stdio"`.
-- There are no built-in tools and no HTTP/env-based tool loading. `prefix` is not applied; names must match what the MCP server returns.
+- Each `mcp.servers` entry is connected via the FastMCP `Client` (stdio starts a subprocess; http connects to a URL). Tools are registered with their original name and schema, marked `source="mcp:{server_name}"`.
+- `prefix` is not applied; names must match what the MCP server returns.
 - Tool activation toggles are stored in-memory; `/api/tools/{name}/active` and the UI settings panel flip them on/off for subsequent turns.
 
 ## Config Files and Env

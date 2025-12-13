@@ -31,13 +31,12 @@ Local-first chat UI powered by the OpenAI **Responses API**, a FastAPI backend, 
 - `config/config.toml` (override with `APP_CONFIG_FILE`): default model, allowed models, reasoning effort defaults, text verbosity, and max output tokens.
 - `config/prompts.toml` (override with `PROMPTS_CONFIG_FILE`): system prompt injected into new chats.
 - `config/samples.toml` (override with `SAMPLES_CONFIG_FILE`): quick-start suggestion cards shown in the UI.
-- `config/mcp.toml` (override with `MCP_CONFIG_FILE`): FastMCP servers to auto-discover tools from. Supports `[[mcp.stdio_servers]]` and `[[mcp.http_servers]]`. Example:
+- `config/mcp.toml` (override with `MCP_CONFIG_FILE`): FastMCP servers to auto-discover tools from. Shorthand entries with only `url` are passed directly to `fastmcp.Client(...)` (transport inferred); entries with extra fields are treated as full MCP server configs. Example:
   ```toml
   [mcp]
-  [[mcp.stdio_servers]]
-  command = "fastmcp"
-  args = ["run", "mcps/time_helper.py:mcp"]
-  cwd = "."
+  [[mcp.servers]]
+  name = "time_helper"
+  url = "mcps/time_helper.py"
   # env = { EXAMPLE = "1" }
   ```
   Each server is discovered at backend boot and its tools are registered without renaming, so tool names match the server definitions.
@@ -46,7 +45,7 @@ Local-first chat UI powered by the OpenAI **Responses API**, a FastAPI backend, 
 - The repo includes `mcps/time_helper.py` (FastMCP) exposing `current_time` and `find_timezone`.
 - With the sample `config/mcp.toml`, the FastAPI app will launch the stdio FastMCP process automatically on startup.
 - If you want to run it manually over stdio: `fastmcp run mcps/time_helper.py:mcp`.
-- For an HTTP example, start `mcps/time_helper_http.py` (serves on `http://127.0.0.1:9001/mcp`) and add an `http_servers` entry.
+- For an HTTP example, start `mcps/time_helper_http.py` (serves on `http://127.0.0.1:9001/mcp`) and add another `[[mcp.servers]]` entry.
 
 ### API
 - `GET /health` → health probe.

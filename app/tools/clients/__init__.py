@@ -1,70 +1,45 @@
+import hashlib
+import json
 import threading
+from pathlib import Path
 from typing import Any, Dict, List, Optional
 
-from .http import MCPHttpClient
-from .stdio import MCPProcessClient
+from .base import _BaseMCPClient
 
 
-_CLIENT_CACHE: Dict[tuple, MCPProcessClient] = {}
-_HTTP_CLIENT_CACHE: Dict[tuple, MCPHttpClient] = {}
+_CLIENT_CACHE: Dict[str, _BaseMCPClient] = {}
 _CLIENT_CACHE_LOCK = threading.Lock()
 
 
-def _client_cache_key(
-    command: str,
-    args: Optional[List[str]],
-    env: Optional[Dict[str, str]],
-    cwd: Optional[str],
-) -> tuple:
-    env_items = tuple(sorted((env or {}).items()))
-    return (command, tuple(args or []), env_items, cwd)
+def _json_default(obj: Any) -> Any:
+    if isinstance(obj, Path):
+        return str(obj)
+    if hasattr(obj, "model_dump"):
+        return obj.model_dump(exclude_none=True)  # type: ignore[no-any-return]
+    return repr(obj)
 
 
-def _get_process_client(
-    command: str,
-    args: Optional[List[str]],
-    env: Optional[Dict[str, str]],
-    cwd: Optional[str],
-) -> MCPProcessClient:
-    key = _client_cache_key(command, args, env, cwd)
+def _spec_cache_key(spec: Any) -> str:
+    try:
+        payload = {"type": type(spec).__name__, "spec": spec}
+        dumped = json.dumps(payload, sort_keys=True, default=_json_default, separators=(",", ":"))
+    except TypeError:
+        dumped = f"{type(spec).__name__}:{repr(spec)}"
+    return hashlib.sha256(dumped.encode("utf-8")).hexdigest()
+
+
+def _get_client(spec: Any) -> _BaseMCPClient:
+    key = _spec_cache_key(spec)
     with _CLIENT_CACHE_LOCK:
         client = _CLIENT_CACHE.get(key)
         if client and client.is_running:
             return client
-        client = MCPProcessClient(command, args, env, cwd)
+        client = _BaseMCPClient(spec, client_name="bluegpt-mcp")
         _CLIENT_CACHE[key] = client
         return client
 
 
-def _http_client_cache_key(
-    url: str,
-    headers: Optional[Dict[str, str]],
-    auth: Any,
-    sse_read_timeout: Any,
-) -> tuple:
-    headers_items = tuple(sorted((headers or {}).items()))
-    return (url, headers_items, str(auth) if auth is not None else None, sse_read_timeout)
-
-
-def _get_http_client(
-    url: str,
-    headers: Optional[Dict[str, str]],
-    auth: Any,
-    sse_read_timeout: Any,
-) -> MCPHttpClient:
-    key = _http_client_cache_key(url, headers, auth, sse_read_timeout)
-    with _CLIENT_CACHE_LOCK:
-        client = _HTTP_CLIENT_CACHE.get(key)
-        if client and client.is_running:
-            return client
-        client = MCPHttpClient(url, headers=headers, auth=auth, sse_read_timeout=sse_read_timeout)
-        _HTTP_CLIENT_CACHE[key] = client
-        return client
-
-
 __all__ = [
-    "MCPProcessClient",
-    "MCPHttpClient",
-    "_get_process_client",
-    "_get_http_client",
+    "_BaseMCPClient",
+    "_get_client",
 ]
